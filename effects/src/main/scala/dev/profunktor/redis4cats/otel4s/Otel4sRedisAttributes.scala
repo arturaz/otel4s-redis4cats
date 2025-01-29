@@ -1,15 +1,16 @@
 package dev.profunktor.redis4cats.otel4s
 
-import org.typelevel.otel4s.AttributeKey
-import scala.concurrent.duration.FiniteDuration
-import org.typelevel.otel4s.Attribute
-import dev.profunktor.redis4cats.effects
-import scala.concurrent.duration.Duration
-import io.lettuce.core.ZAggregateArgs
 import cats.syntax.show.*
-import io.lettuce.core
 import dev.profunktor.redis4cats.algebra.BitCommandOperation
+import dev.profunktor.redis4cats.effects
+import io.lettuce.core
+import io.lettuce.core.ZAggregateArgs
+import org.typelevel.otel4s.Attribute
+import org.typelevel.otel4s.AttributeKey
+
 import java.time.Instant
+import scala.concurrent.duration.Duration
+import scala.concurrent.duration.FiniteDuration
 
 object Otel4sRedisAttributes {
   import Implicits.*
@@ -64,7 +65,7 @@ object Otel4sRedisAttributes {
 
   val RangeStart: AttributeKey[String] = AttributeKey.string("db.redis.range.start")
   val RangeEnd: AttributeKey[String] = AttributeKey.string("db.redis.range.end")
-  def range(range: effects.ZRange[String]): List[Attribute[String]] = 
+  def range(range: effects.ZRange[String]): List[Attribute[String]] =
     RangeStart(range.start) :: RangeEnd(range.end) :: Nil
 
   val RangeLimitOffset: AttributeKey[Long] = AttributeKey.long("db.redis.rangeLimit.offset")
