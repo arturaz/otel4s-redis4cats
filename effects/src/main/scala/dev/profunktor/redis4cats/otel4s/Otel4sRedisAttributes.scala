@@ -62,8 +62,10 @@ object Otel4sRedisAttributes {
   val Index: AttributeKey[Long] = AttributeKey.long("db.redis.index")
   val Pivot: AttributeKey[String] = AttributeKey.string("db.redis.pivot")
 
-  val Range: AttributeKey[String] = AttributeKey.string("db.redis.range")
-  def range[A](range: effects.ZRange[A]): Attribute[String] = Range(range.toString)
+  val RangeStart: AttributeKey[String] = AttributeKey.string("db.redis.range.start")
+  val RangeEnd: AttributeKey[String] = AttributeKey.string("db.redis.range.end")
+  def range(range: effects.ZRange[String]): List[Attribute[String]] = 
+    RangeStart(range.start) :: RangeEnd(range.end) :: Nil
 
   val RangeLimitOffset: AttributeKey[Long] = AttributeKey.long("db.redis.rangeLimit.offset")
   val RangeLimitCount: AttributeKey[Long] = AttributeKey.long("db.redis.rangeLimit.count")

@@ -16,7 +16,6 @@ import io.lettuce.core.protocol.CommandArgs
 
 import scala.util.control.NonFatal
 
-import Otel4sRedisAttributes.*
 import dev.profunktor.redis4cats.algebra.BitCommandOperation
 import io.lettuce.core.KeyScanArgs
 import io.lettuce.core
@@ -45,6 +44,11 @@ object Implicits {
     show"lon=${lon.value} lat=${lat.value} value=$value"
   }
 
+  implicit val functorZRange: Functor[effects.ZRange] = new Functor[effects.ZRange] {
+    override def map[A, B](fa: effects.ZRange[A])(f: A => B): effects.ZRange[B] =
+      effects.ZRange(f(fa.start), f(fa.end))
+  }
+
   implicit val functorGeoRadiusKeyStorage: Functor[effects.GeoRadiusKeyStorage] = new Functor[effects.GeoRadiusKeyStorage] {
     override def map[A, B](fa: effects.GeoRadiusKeyStorage[A])(f: A => B): effects.GeoRadiusKeyStorage[B] =
       effects.GeoRadiusKeyStorage(f(fa.key), fa.count, fa.sort)
@@ -64,7 +68,6 @@ object Implicits {
     override def apply[A](fa: effects.ZRange[A], mapper: A => String): String =
       s"${mapper(fa.start)} - ${mapper(fa.end)}"
   }
-  implicit def keyForZRange[A]: KeyFor[effects.ZRange[A]] { type Out = String } = KeyFor(Range)
 
   implicit val toStringsKeyScanCursor: ToStrings[data.KeyScanCursor] = new ToStrings[data.KeyScanCursor] {
     override def apply[A](fa: data.KeyScanCursor[A], mapper: A => String): Seq[String] =

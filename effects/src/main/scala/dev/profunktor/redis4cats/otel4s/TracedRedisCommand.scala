@@ -378,12 +378,12 @@ class TracedRedisCommands[F[_], K, V](
     span("zCard", keyAsAttribute(key).toList)(cmd.zCard(key))
 
   override def zCount[T: Numeric](key: K, range: effects.ZRange[T]): F[Long] =
-    span("zCount", Attributes.Range(range.toString) :: keyAsAttribute(key).toList)(cmd.zCount(key, range))
+    span("zCount", Attributes.range(range.map(_.toString)) ::: keyAsAttribute(key).toList)(cmd.zCount(key, range))
 
   override def zLexCount(key: K, range: effects.ZRange[V]): F[Long] =
     span(
       "zLexCount",
-      mapAsAttribute(range, recordValue).toList ::: keyAsAttribute(key).toList
+      recordValue.toList.flatMap(f => Attributes.range(range.map(f))) ::: keyAsAttribute(key).toList
     )(cmd.zLexCount(key, range))
 
   override def zRange(key: K, start: Long, stop: Long): F[List[V]] =
@@ -394,7 +394,9 @@ class TracedRedisCommands[F[_], K, V](
   override def zRangeByLex(key: K, range: effects.ZRange[V], limit: Option[effects.RangeLimit]): F[List[V]] =
     span(
       "zRangeByLex",
-      Attributes.rangeLimit(limit) ::: mapAsAttribute(range, recordValue).toList ::: keyAsAttribute(key).toList
+      Attributes.rangeLimit(limit) ::: recordValue.toList.flatMap(f =>
+        Attributes.range(range.map(f))
+      ) ::: keyAsAttribute(key).toList
     )(cmd.zRangeByLex(key, range, limit))
 
   override def zRangeByScore[T: Numeric](
@@ -404,7 +406,7 @@ class TracedRedisCommands[F[_], K, V](
   ): F[List[V]] =
     span(
       "zRangeByScore",
-      Attributes.rangeLimit(limit) ::: Attributes.range(range) :: keyAsAttribute(key).toList
+      Attributes.rangeLimit(limit) ::: Attributes.range(range.map(_.toString)) ::: keyAsAttribute(key).toList
     )(cmd.zRangeByScore(key, range, limit))
 
   override def zRangeByScoreWithScores[T: Numeric](
@@ -414,7 +416,7 @@ class TracedRedisCommands[F[_], K, V](
   ): F[List[effects.ScoreWithValue[V]]] =
     span(
       "zRangeByScoreWithScores",
-      Attributes.rangeLimit(limit) ::: Attributes.range(range) :: keyAsAttribute(key).toList
+      Attributes.rangeLimit(limit) ::: Attributes.range(range.map(_.toString)) ::: keyAsAttribute(key).toList
     )(cmd.zRangeByScoreWithScores(key, range, limit))
 
   override def zRangeWithScores(key: K, start: Long, stop: Long): F[List[effects.ScoreWithValue[V]]] =
@@ -435,7 +437,9 @@ class TracedRedisCommands[F[_], K, V](
   override def zRevRangeByLex(key: K, range: effects.ZRange[V], limit: Option[effects.RangeLimit]): F[List[V]] =
     span(
       "zRevRangeByLex",
-      Attributes.rangeLimit(limit) ::: mapAsAttribute(range, recordValue).toList ::: keyAsAttribute(key).toList
+      Attributes.rangeLimit(limit) ::: recordValue.toList.flatMap(f =>
+        Attributes.range(range.map(f))
+      ) ::: keyAsAttribute(key).toList
     )(cmd.zRevRangeByLex(key, range, limit))
 
   override def zRevRangeByScore[T: Numeric](
@@ -445,7 +449,7 @@ class TracedRedisCommands[F[_], K, V](
   ): F[List[V]] =
     span(
       "zRevRangeByScore",
-      Attributes.rangeLimit(limit) ::: Attributes.range(range) :: keyAsAttribute(key).toList
+      Attributes.rangeLimit(limit) ::: Attributes.range(range.map(_.toString)) ::: keyAsAttribute(key).toList
     )(cmd.zRevRangeByScore(key, range, limit))
 
   override def zRevRangeByScoreWithScores[T: Numeric](
@@ -455,7 +459,7 @@ class TracedRedisCommands[F[_], K, V](
   ): F[List[effects.ScoreWithValue[V]]] =
     span(
       "zRevRangeByScoreWithScores",
-      Attributes.rangeLimit(limit) ::: Attributes.range(range) :: keyAsAttribute(key).toList
+      Attributes.rangeLimit(limit) ::: Attributes.range(range.map(_.toString)) ::: keyAsAttribute(key).toList
     )(cmd.zRevRangeByScoreWithScores(key, range, limit))
 
   override def zRevRangeWithScores(key: K, start: Long, stop: Long): F[List[effects.ScoreWithValue[V]]] =
@@ -541,7 +545,10 @@ class TracedRedisCommands[F[_], K, V](
     span("zRem", values2AsAttribute(values).toList ::: keyAsAttribute(key).toList)(cmd.zRem(key, values*))
 
   override def zRemRangeByLex(key: K, range: effects.ZRange[V]): F[Long] =
-    span("zRemRangeByLex", mapAsAttribute(range, recordValue).toList ::: keyAsAttribute(key).toList)(
+    span(
+      "zRemRangeByLex",
+      recordValue.toList.flatMap(f => Attributes.range(range.map(f))) ::: keyAsAttribute(key).toList
+    )(
       cmd.zRemRangeByLex(key, range)
     )
 
@@ -551,7 +558,7 @@ class TracedRedisCommands[F[_], K, V](
     )
 
   override def zRemRangeByScore[T: Numeric](key: K, range: effects.ZRange[T]): F[Long] =
-    span("zRemRangeByScore", Attributes.range(range) :: keyAsAttribute(key).toList)(
+    span("zRemRangeByScore", Attributes.range(range.map(_.toString)) ::: keyAsAttribute(key).toList)(
       cmd.zRemRangeByScore(key, range)
     )
 
