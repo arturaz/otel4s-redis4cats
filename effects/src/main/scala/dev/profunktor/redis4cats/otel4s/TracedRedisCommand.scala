@@ -27,37 +27,47 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration
 
 object TracedRedisCommands {
-
-  def apply[F[_]: Functor, K, V](
-      cmd: RedisCommands[F, K, V],
+  /** 
+   * @param configureSpanBuilder 
+   *   A function that configures a span builder.
+   * @param recordKey 
+   *   A function that converts keys of a command to strings. If `None`, the keys will not be recorded.
+   * @param recordValue 
+   *   A function that converts values of a command to strings. If `None`, the values will not be recorded.
+   */
+  case class Config[F[_], K, V](
       configureSpanBuilder: SpanBuilder[F] => SpanBuilder[F],
       recordKey: Option[K => String],
       recordValue: Option[V => String]
+  )
+
+  /** Constructor for [[TracerProvider]]. */
+  def apply[F[_]: Functor, K, V](
+      cmd: RedisCommands[F, K, V],
+      config: Config[F, K, V]
   )(implicit tracerProvider: TracerProvider[F]): F[RedisCommands[F, K, V]] = {
-    tracerProvider.tracer("dev.profunktor.redis4cats.otel4s").withVersion("TODO").get.map { tracer =>
-      fromTracer(cmd, configureSpanBuilder, recordKey, recordValue)(tracer)
+    tracerProvider.tracer("dev.profunktor.redis4cats.otel4s").withVersion(buildinfo.BuildInfo.version).get.map { tracer =>
+      fromTracer(cmd, config)(tracer)
     }
   }
 
+  /** Constructor for [[Tracer]]. */
   def fromTracer[F[_], K, V](
-      cmd: RedisCommands[F, K, V],
-      configureSpanBuilder: SpanBuilder[F] => SpanBuilder[F],
-      recordKey: Option[K => String],
-      recordValue: Option[V => String]
+      cmd: RedisCommands[F, K, V], 
+      config: Config[F, K, V]
   )(implicit tracer: Tracer[F]): RedisCommands[F, K, V] = {
-    new TracedRedisCommands(recordKey, recordValue, tracer, configureSpanBuilder, cmd)
+    new TracedRedisCommands(config, tracer, cmd)
   }
 }
 @nowarn("cat=deprecation")
 class TracedRedisCommands[F[_], K, V](
-    recordKey: Option[K => String],
-    recordValue: Option[V => String],
+    config: TracedRedisCommands.Config[F, K, V],
     tracer: Tracer[F],
-    configureSpanBuilder: SpanBuilder[F] => SpanBuilder[F],
     cmd: RedisCommands[F, K, V]
 ) extends RedisCommands[F, K, V] {
   import Implicits.*
   import Helpers.*
+  import config.*
   val Attributes = Otel4sRedisAttributes
 
   // We use raw pattern matching in these helpers for performance.

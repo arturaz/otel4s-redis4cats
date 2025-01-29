@@ -25,13 +25,16 @@ val Otel4sVersion = "0.11.2"
 
 lazy val root = tlCrossRootProject.aggregate(effects, streams)
 
-lazy val effects = project.in(file("effects"))
+lazy val effects = project.in(file("effects")).
+  enablePlugins(BuildInfoPlugin)
   .settings(
     name := "otel4s-redis4cats-effects",
     libraryDependencies ++= Seq(
       "dev.profunktor" %% "redis4cats-effects" % Redis4CatsVersion,
       "org.typelevel" %% "otel4s-core-trace" % Otel4sVersion,
-    )
+    ),
+    buildInfoKeys := Seq[BuildInfoKey](version),
+    buildInfoPackage := "dev.profunktor.redis4cats.otel4s.buildinfo"
   )
 
 lazy val streams = project.in(file("streams"))
