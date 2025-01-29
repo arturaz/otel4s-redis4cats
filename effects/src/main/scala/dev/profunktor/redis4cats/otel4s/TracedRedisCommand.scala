@@ -3,6 +3,7 @@ package dev.profunktor.redis4cats.otel4s
 import cats.Functor
 import cats.data.NonEmptyList
 import cats.syntax.functor.*
+import cats.syntax.show.*
 import dev.profunktor.redis4cats.RedisCommands
 import dev.profunktor.redis4cats.algebra.BitCommandOperation
 import dev.profunktor.redis4cats.data
@@ -17,71 +18,15 @@ import io.lettuce.core.cluster.api.async.RedisClusterAsyncCommands
 import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.AttributeKey
 import org.typelevel.otel4s.trace.SpanBuilder
+import org.typelevel.otel4s.trace.Tracer
 import org.typelevel.otel4s.trace.TracerProvider
 
 import java.time.Instant
+import scala.annotation.nowarn
 import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration
-import org.typelevel.otel4s.trace.Tracer
 
 object TracedRedisCommands {
-  object Attributes {
-    val Key: AttributeKey[String] = AttributeKey.string("redis.key")
-    val Keys: AttributeKey[Seq[String]] = AttributeKey.stringSeq("redis.keys")
-    val KeyValuePairs: AttributeKey[Seq[String]] = AttributeKey.stringSeq("redis.keyValuePairs")
-    val Value: AttributeKey[String] = AttributeKey.string("redis.value")
-    val Values: AttributeKey[Seq[String]] = AttributeKey.stringSeq("redis.values")
-    val GetExArg: AttributeKey[String] = AttributeKey.string("redis.getExArg")
-    val Start: AttributeKey[Long] = AttributeKey.long("redis.start")
-    val Stop: AttributeKey[Long] = AttributeKey.long("redis.stop")
-    val End: AttributeKey[Long] = AttributeKey.long("redis.end")
-    val SetArgs: AttributeKey[String] = AttributeKey.string("redis.setArgs")
-
-    /** Expiration time in milliseconds. */
-    val ExpiresIn: AttributeKey[Long] = AttributeKey.long("redis.expiresIn")
-    def expiresIn(fd: FiniteDuration): Attribute[Long] = ExpiresIn(fd.toMillis)
-
-    val Offset: AttributeKey[Long] = AttributeKey.long("redis.offset")
-    val Amount: AttributeKey[Long] = AttributeKey.long("redis.amount")
-    val AmountDouble: AttributeKey[Double] = AttributeKey.double("redis.amount")
-    val Field: AttributeKey[String] = AttributeKey.string("redis.field")
-    val Fields: AttributeKey[Seq[String]] = AttributeKey.stringSeq("redis.fields")
-    val FieldValues: AttributeKey[Seq[String]] = AttributeKey.stringSeq("redis.fieldValues")
-    val Count: AttributeKey[Long] = AttributeKey.long("redis.count")
-    val Destination: AttributeKey[String] = AttributeKey.string("redis.destination")
-
-    val Range: AttributeKey[String] = AttributeKey.string("redis.range")
-    def range[A](range: effects.ZRange[A]): Attribute[String] = Range(range.toString)
-
-    val RangeLimitOffset: AttributeKey[Long] = AttributeKey.long("redis.rangeLimit.offset")
-    val RangeLimitCount: AttributeKey[Long] = AttributeKey.long("redis.rangeLimit.count")
-    def rangeLimit(limit: effects.RangeLimit): List[Attribute[Long]] = {
-      val effects.RangeLimit(offset, count) = limit
-      RangeLimitOffset(offset) :: RangeLimitCount(count) :: Nil
-    }
-    def rangeLimit(limit: Option[effects.RangeLimit]): List[Attribute[Long]] = limit match {
-      case None        => Nil
-      case Some(limit) => rangeLimit(limit)
-    }
-
-    def durationAsLong(duration: Duration): Long = duration match {
-      case fd: FiniteDuration => fd.toMillis
-      case _: Duration        => -1
-    }
-
-    val Timeout: AttributeKey[Long] = AttributeKey.long("redis.timeout")
-    def timeout(duration: Duration): Attribute[Long] = Timeout(durationAsLong(duration))
-
-    val AggregateArgs: AttributeKey[String] = AttributeKey.string("redis.aggregateArgs")
-    def aggregateArgs(args: ZAggregateArgs): Attribute[String] = AggregateArgs(args.toString)
-    def aggregateArgs(args: Option[ZAggregateArgs]): Option[Attribute[String]] = args match {
-      case None       => None
-      case Some(args) => Some(aggregateArgs(args))
-    }
-
-    val ScoreWithValueScore: AttributeKey[Double] = AttributeKey.double("redis.scoreWithValue.score")
-    val ScoreWithValueValue: AttributeKey[String] = AttributeKey.string("redis.scoreWithValue.value")
-  }
 
   def apply[F[_]: Functor, K, V](
       cmd: RedisCommands[F, K, V],
@@ -90,10 +35,20 @@ object TracedRedisCommands {
       recordValue: Option[V => String]
   )(implicit tracerProvider: TracerProvider[F]): F[RedisCommands[F, K, V]] = {
     tracerProvider.tracer("dev.profunktor.redis4cats.otel4s").withVersion("TODO").get.map { tracer =>
-      new TracedRedisCommands(recordKey, recordValue, tracer, configureSpanBuilder, cmd)
+      fromTracer(cmd, configureSpanBuilder, recordKey, recordValue)(tracer)
     }
   }
+
+  def fromTracer[F[_], K, V](
+      cmd: RedisCommands[F, K, V],
+      configureSpanBuilder: SpanBuilder[F] => SpanBuilder[F],
+      recordKey: Option[K => String],
+      recordValue: Option[V => String]
+  )(implicit tracer: Tracer[F]): RedisCommands[F, K, V] = {
+    new TracedRedisCommands(recordKey, recordValue, tracer, configureSpanBuilder, cmd)
+  }
 }
+@nowarn("cat=deprecation")
 class TracedRedisCommands[F[_], K, V](
     recordKey: Option[K => String],
     recordValue: Option[V => String],
@@ -101,110 +56,131 @@ class TracedRedisCommands[F[_], K, V](
     configureSpanBuilder: SpanBuilder[F] => SpanBuilder[F],
     cmd: RedisCommands[F, K, V]
 ) extends RedisCommands[F, K, V] {
-  import TracedRedisCommands.Attributes
+  import Implicits.*
+  import Helpers.*
+  val Attributes = Otel4sRedisAttributes
 
   // We use raw pattern matching in these helpers for performance.
+  object Helpers {
+    def mapToString[Value[_], A](value: Value[A], mapper: Option[A => String])(implicit
+        toString: ToString[Value]
+    ): Option[String] =
+      mapper.map(toString(value, _))
 
-  def map[A](range: effects.ZRange[A], mapper: Option[A => String]): Option[effects.ZRange[String]] = mapper match {
-    case None         => None
-    case Some(mapper) => Some(effects.ZRange(mapper(range.start), mapper(range.end)))
-  }
+    def mapToStrings[Value[_], A](value: Value[A], mapper: Option[A => String])(implicit
+        toString: ToStrings[Value]
+    ): Option[Seq[String]] =
+      mapper.map(toString(value, _))
 
-  def mapAsAttribute[A](
-      range: effects.ZRange[A],
-      mapper: Option[A => String],
-      attr: AttributeKey[String] = Attributes.Range
-  ): Option[Attribute[String]] =
-    map(range, mapper) match {
-      case None        => None
-      case Some(range) => Some(attr(range.toString()))
+    def mapAsAttribute[Value[_], A](
+        value: Value[A],
+        mapper: Option[A => String]
+    )(implicit
+        ev: Attributes.KeyFor[Value[A]] { type Out = String },
+        toString: ToString[Value]
+    ): Option[Attribute[String]] =
+      mapToString(value, mapper).map(ev.key(_))
+
+    def mapAsAttribute[Value[_], A](
+        value: Value[A],
+        mapper: Option[A => String],
+        attr: AttributeKey[Seq[String]]
+    )(implicit toStrings: ToStrings[Value]): Option[Attribute[Seq[String]]] =
+      mapToStrings(value, mapper).map(attr(_))
+
+    def map[A](
+        scoreWithValue: effects.ScoreWithValue[A],
+        mapper: Option[A => String]
+    ): Option[effects.ScoreWithValue[String]] = mapper match {
+      case None         => None
+      case Some(mapper) => Some(effects.ScoreWithValue(scoreWithValue.score, mapper(scoreWithValue.value)))
     }
 
-  def map[A](
-      scoreWithValue: effects.ScoreWithValue[A],
-      mapper: Option[A => String]
-  ): Option[effects.ScoreWithValue[String]] = mapper match {
-    case None         => None
-    case Some(mapper) => Some(effects.ScoreWithValue(scoreWithValue.score, mapper(scoreWithValue.value)))
-  }
+    def span[A](name: String, attributes: collection.immutable.Iterable[Attribute[_]] = Nil)(fa: F[A]): F[A] =
+      configureSpanBuilder(tracer.spanBuilder(name).addAttributes(attributes)).build.surround(fa)
 
-  def mapAsAttribute[A](
-      scoreWithValue: effects.ScoreWithValue[A],
-      mapper: Option[A => String],
-      attr: AttributeKey[String] = Attributes.ScoreWithValue
-  ): Option[Attribute[String]] =
-    map(scoreWithValue, mapper) match {
-      case None        => None
-      case Some(range) => Some(attr(range.toString()))
-    }
-
-  def span[A](name: String, attributes: collection.immutable.Iterable[Attribute[_]] = Nil)(fa: F[A]): F[A] =
-    configureSpanBuilder(tracer.spanBuilder(name).addAttributes(attributes)).build.surround(fa)
-
-  def keyAsAttribute(key: K, attr: AttributeKey[String] = Attributes.Key): Option[Attribute[String]] =
-    recordKey match {
-      case None      => None
-      case Some(kFn) => Some(attr(kFn(key)))
-    }
-
-  def keysAsAttribute(
-      key: K,
-      others: Iterable[K],
-      attr: AttributeKey[Seq[String]] = Attributes.Keys
-  ): Option[Attribute[Seq[String]]] =
-    recordKey match {
-      case None      => None
-      case Some(kFn) => Some(attr((Iterator(key) ++ others.iterator).map(kFn).toSeq))
-    }
-
-  def keys2AsAttribute(
-      keys: Iterable[K],
-      attr: AttributeKey[Seq[String]] = Attributes.Keys
-  ): Option[Attribute[Seq[String]]] =
-    recordKey match {
-      case None      => None
-      case Some(kFn) => Some(attr(keys.iterator.map(kFn).toSeq))
-    }
-
-  def valueAsAttribute(value: V): Option[Attribute[String]] = recordValue.map(v => Attributes.Value(v(value)))
-
-  def valuesAsAttribute(
-      value: V,
-      others: Iterable[V],
-      attr: AttributeKey[Seq[String]] = Attributes.Values
-  ): Option[Attribute[Seq[String]]] =
-    recordValue match {
-      case None      => None
-      case Some(vFn) => Some(attr((Iterator(value) ++ others.iterator).map(vFn).toSeq))
-    }
-
-  def values2AsAttribute(
-      values: Iterable[V],
-      attr: AttributeKey[Seq[String]] = Attributes.Values
-  ): Option[Attribute[Seq[String]]] =
-    recordValue match {
-      case None      => None
-      case Some(vFn) => Some(attr(values.iterator.map(vFn).toSeq))
-    }
-
-  def kvsAsAttribute(
-      kvs: Map[K, V],
-      attr: AttributeKey[Seq[String]] = Attributes.KeyValuePairs
-  ): Option[Attribute[Seq[String]]] = recordKey match {
-    case None => None
-    case Some(kFn) =>
-      recordValue match {
-        case None =>
-          Some(attr(kvs.keysIterator.map(k => s"${kFn(k)}=<unserialized>").toSeq))
-        case Some(vFn) =>
-          Some(attr(kvs.iterator.map { case (k, v) => s"${kFn(k)}=${vFn(v)}" }.toSeq))
+    def maybeMappableValueAsAttribute[A](
+        maybeMapper: Option[A => String],
+        value: A,
+        attr: AttributeKey[String]
+    ): Option[Attribute[String]] =
+      maybeMapper match {
+        case None         => None
+        case Some(mapper) => Some(attr(mapper(value)))
       }
-  }
 
-  def kvAsAttributes(key: K, value: V): List[Attribute[String]] = {
-    keyAsAttribute(key) match {
-      case None               => valueAsAttribute(value).toList
-      case Some(keyAttribute) => keyAttribute :: valueAsAttribute(value).toList
+    def maybeMappableValuesAsAttribute[A](
+        maybeMapper: Option[A => String],
+        value: A,
+        others: Iterable[A],
+        attr: AttributeKey[Seq[String]]
+    ): Option[Attribute[Seq[String]]] =
+      maybeMapper match {
+        case None         => None
+        case Some(mapper) => Some(attr((Iterator(value) ++ others.iterator).map(mapper).toSeq))
+      }
+
+    def maybeMappableValuesAsAttribute[A](
+        maybeMapper: Option[A => String],
+        values: Iterable[A],
+        attr: AttributeKey[Seq[String]]
+    ): Option[Attribute[Seq[String]]] =
+      maybeMapper match {
+        case None         => None
+        case Some(mapper) => Some(attr(values.iterator.map(mapper).toSeq))
+      }
+
+    def keyAsAttribute(key: K, attr: AttributeKey[String] = Attributes.Key): Option[Attribute[String]] =
+      maybeMappableValueAsAttribute(recordKey, key, attr)
+
+    def keysAsAttribute(
+        key: K,
+        others: Iterable[K],
+        attr: AttributeKey[Seq[String]] = Attributes.Keys
+    ): Option[Attribute[Seq[String]]] =
+      maybeMappableValuesAsAttribute(recordKey, key, others, attr)
+
+    def keys2AsAttribute(
+        keys: Iterable[K],
+        attr: AttributeKey[Seq[String]] = Attributes.Keys
+    ): Option[Attribute[Seq[String]]] =
+      maybeMappableValuesAsAttribute(recordKey, keys, attr)
+
+    def valueAsAttribute(value: V, attr: AttributeKey[String] = Attributes.Value): Option[Attribute[String]] =
+      maybeMappableValueAsAttribute(recordValue, value, attr)
+
+    def valuesAsAttribute(
+        value: V,
+        others: Iterable[V],
+        attr: AttributeKey[Seq[String]] = Attributes.Values
+    ): Option[Attribute[Seq[String]]] =
+      maybeMappableValuesAsAttribute(recordValue, value, others, attr)
+
+    def values2AsAttribute(
+        values: Iterable[V],
+        attr: AttributeKey[Seq[String]] = Attributes.Values
+    ): Option[Attribute[Seq[String]]] =
+      maybeMappableValuesAsAttribute(recordValue, values, attr)
+
+    def kvsAsAttribute(
+        kvs: Map[K, V],
+        attr: AttributeKey[Seq[String]] = Attributes.KeyValuePairs
+    ): Option[Attribute[Seq[String]]] = recordKey match {
+      case None => None
+      case Some(kFn) =>
+        recordValue match {
+          case None =>
+            Some(attr(kvs.keysIterator.map(k => s"${kFn(k)}=<unserialized>").toSeq))
+          case Some(vFn) =>
+            Some(attr(kvs.iterator.map { case (k, v) => s"${kFn(k)}=${vFn(v)}" }.toSeq))
+        }
+    }
+
+    def kvAsAttributes(key: K, value: V): List[Attribute[String]] = {
+      keyAsAttribute(key) match {
+        case None               => valueAsAttribute(value).toList
+        case Some(keyAttribute) => keyAttribute :: valueAsAttribute(value).toList
+      }
     }
   }
 
@@ -507,18 +483,18 @@ class TracedRedisCommands[F[_], K, V](
     span("bzPopMin", Attributes.timeout(timeout) :: keys2AsAttribute(keys.toList).toList)(cmd.bzPopMin(timeout, keys))
 
   override def zUnion(args: Option[ZAggregateArgs], keys: K*): F[List[V]] =
-    span("zUnion", Attributes.aggregateArgs(args).toList ::: keys2AsAttribute(keys).toList)(cmd.zUnion(args, keys*))
+    span("zUnion", args.map(Attributes.aggregateArgs).toList ::: keys2AsAttribute(keys).toList)(cmd.zUnion(args, keys*))
 
   override def zUnionWithScores(args: Option[ZAggregateArgs], keys: K*): F[List[effects.ScoreWithValue[V]]] =
-    span("zUnionWithScores", Attributes.aggregateArgs(args).toList ::: keys2AsAttribute(keys).toList)(
+    span("zUnionWithScores", args.map(Attributes.aggregateArgs).toList ::: keys2AsAttribute(keys).toList)(
       cmd.zUnionWithScores(args, keys*)
     )
 
   override def zInter(args: Option[ZAggregateArgs], keys: K*): F[List[V]] =
-    span("zInter", Attributes.aggregateArgs(args).toList ::: keys2AsAttribute(keys).toList)(cmd.zInter(args, keys*))
+    span("zInter", args.map(Attributes.aggregateArgs).toList ::: keys2AsAttribute(keys).toList)(cmd.zInter(args, keys*))
 
   override def zInterWithScores(args: Option[ZAggregateArgs], keys: K*): F[List[effects.ScoreWithValue[V]]] =
-    span("zInterWithScores", Attributes.aggregateArgs(args).toList ::: keys2AsAttribute(keys).toList)(
+    span("zInterWithScores", args.map(Attributes.aggregateArgs).toList ::: keys2AsAttribute(keys).toList)(
       cmd.zInterWithScores(args, keys*)
     )
 
@@ -531,79 +507,177 @@ class TracedRedisCommands[F[_], K, V](
   override def zAdd(key: K, args: Option[ZAddArgs], values: effects.ScoreWithValue[V]*): F[Long] =
     span(
       "zAdd",
-      Attributes.aggregateArgs(args).toList ::: mapAsAttribute(values, recordValue).toList ::: keyAsAttribute(
-        key
-      ).toList
+      args.map(Attributes.zAddArgs).toList ::: Attributes.scoresWithValue(recordValue, values).toList :::
+        keyAsAttribute(key).toList
     )(cmd.zAdd(key, args, values*))
 
-  override def zAddIncr(key: K, args: Option[ZAddArgs], value: effects.ScoreWithValue[V]): F[Double] = ???
+  override def zAddIncr(key: K, args: Option[ZAddArgs], value: effects.ScoreWithValue[V]): F[Double] =
+    span(
+      "zAddIncr",
+      Attributes.scoreWithValue(recordValue, value) ::: args.map(Attributes.zAddArgs).toList ::: keyAsAttribute(
+        key
+      ).toList
+    )(cmd.zAddIncr(key, args, value))
 
-  override def zIncrBy(key: K, member: V, amount: Double): F[Double] = ???
+  override def zIncrBy(key: K, member: V, amount: Double): F[Double] =
+    span(
+      "zIncrBy",
+      valueAsAttribute(member, Attributes.Member).toList ::: Attributes.AmountDouble(amount) :: keyAsAttribute(
+        key
+      ).toList
+    )(
+      cmd.zIncrBy(key, member, amount)
+    )
 
-  override def zInterStore(destination: K, args: Option[ZStoreArgs], keys: K*): F[Long] = ???
+  override def zInterStore(destination: K, args: Option[ZStoreArgs], keys: K*): F[Long] =
+    span(
+      "zInterStore",
+      keyAsAttribute(destination, Attributes.Destination).toList ::: args
+        .map(Attributes.zStoreArgs)
+        .toList ::: keys2AsAttribute(keys).toList
+    )(cmd.zInterStore(destination, args, keys*))
 
-  override def zRem(key: K, values: V*): F[Long] = ???
+  override def zRem(key: K, values: V*): F[Long] =
+    span("zRem", values2AsAttribute(values).toList ::: keyAsAttribute(key).toList)(cmd.zRem(key, values*))
 
-  override def zRemRangeByLex(key: K, range: effects.ZRange[V]): F[Long] = ???
+  override def zRemRangeByLex(key: K, range: effects.ZRange[V]): F[Long] =
+    span("zRemRangeByLex", mapAsAttribute(range, recordValue).toList ::: keyAsAttribute(key).toList)(
+      cmd.zRemRangeByLex(key, range)
+    )
 
-  override def zRemRangeByRank(key: K, start: Long, stop: Long): F[Long] = ???
+  override def zRemRangeByRank(key: K, start: Long, stop: Long): F[Long] =
+    span("zRemRangeByRank", Attributes.Start(start) :: Attributes.Stop(stop) :: keyAsAttribute(key).toList)(
+      cmd.zRemRangeByRank(key, start, stop)
+    )
 
-  override def zRemRangeByScore[T: Numeric](key: K, range: effects.ZRange[T]): F[Long] = ???
+  override def zRemRangeByScore[T: Numeric](key: K, range: effects.ZRange[T]): F[Long] =
+    span("zRemRangeByScore", Attributes.range(range) :: keyAsAttribute(key).toList)(
+      cmd.zRemRangeByScore(key, range)
+    )
 
-  override def zUnionStore(destination: K, args: Option[ZStoreArgs], keys: K*): F[Long] = ???
+  override def zUnionStore(destination: K, args: Option[ZStoreArgs], keys: K*): F[Long] =
+    span(
+      "zUnionStore",
+      keyAsAttribute(destination, Attributes.Destination).toList ::: args
+        .map(Attributes.zStoreArgs)
+        .toList ::: keys2AsAttribute(keys).toList
+    )(cmd.zUnionStore(destination, args, keys*))
 
-  override def blPop(timeout: Duration, keys: NonEmptyList[K]): F[Option[(K, V)]] = ???
+  override def blPop(timeout: Duration, keys: NonEmptyList[K]): F[Option[(K, V)]] =
+    span("blPop", Attributes.timeout(timeout) :: keys2AsAttribute(keys.toList).toList)(cmd.blPop(timeout, keys))
 
-  override def brPop(timeout: Duration, keys: NonEmptyList[K]): F[Option[(K, V)]] = ???
+  override def brPop(timeout: Duration, keys: NonEmptyList[K]): F[Option[(K, V)]] =
+    span("brPop", Attributes.timeout(timeout) :: keys2AsAttribute(keys.toList).toList)(cmd.brPop(timeout, keys))
 
-  override def brPopLPush(timeout: Duration, source: K, destination: K): F[Option[V]] = ???
+  override def brPopLPush(timeout: Duration, source: K, destination: K): F[Option[V]] =
+    span(
+      "brPopLPush",
+      Attributes.timeout(timeout) :: keyAsAttribute(source, Attributes.Source).toList ::: keyAsAttribute(
+        destination,
+        Attributes.Destination
+      ).toList
+    )(
+      cmd.brPopLPush(timeout, source, destination)
+    )
 
-  override def lIndex(key: K, index: Long): F[Option[V]] = ???
+  override def lIndex(key: K, index: Long): F[Option[V]] =
+    span("lIndex", Attributes.Index(index) :: keyAsAttribute(key).toList)(cmd.lIndex(key, index))
 
-  override def lLen(key: K): F[Long] = ???
+  override def lLen(key: K): F[Long] =
+    span("lLen", keyAsAttribute(key).toList)(cmd.lLen(key))
 
-  override def lRange(key: K, start: Long, stop: Long): F[List[V]] = ???
+  override def lRange(key: K, start: Long, stop: Long): F[List[V]] =
+    span("lRange", Attributes.Start(start) :: Attributes.Stop(stop) :: keyAsAttribute(key).toList)(
+      cmd.lRange(key, start, stop)
+    )
 
-  override def lInsertAfter(key: K, pivot: V, value: V): F[Long] = ???
+  override def lInsertAfter(key: K, pivot: V, value: V): F[Long] =
+    span("lInsertAfter", kvAsAttributes(key, value).toList ::: valueAsAttribute(value, Attributes.Pivot).toList)(
+      cmd.lInsertAfter(key, pivot, value)
+    )
 
-  override def lInsertBefore(key: K, pivot: V, value: V): F[Long] = ???
+  override def lInsertBefore(key: K, pivot: V, value: V): F[Long] =
+    span("lInsertBefore", kvAsAttributes(key, value).toList ::: valueAsAttribute(value, Attributes.Pivot).toList)(
+      cmd.lInsertBefore(key, pivot, value)
+    )
 
-  override def lRem(key: K, count: Long, value: V): F[Long] = ???
+  override def lRem(key: K, count: Long, value: V): F[Long] =
+    span("lRem", Attributes.Count(count) :: kvAsAttributes(key, value).toList)(cmd.lRem(key, count, value))
 
-  override def lSet(key: K, index: Long, value: V): F[Unit] = ???
+  override def lSet(key: K, index: Long, value: V): F[Unit] =
+    span("lSet", Attributes.Index(index) :: kvAsAttributes(key, value).toList)(cmd.lSet(key, index, value))
 
-  override def lTrim(key: K, start: Long, stop: Long): F[Unit] = ???
+  override def lTrim(key: K, start: Long, stop: Long): F[Unit] =
+    span("lTrim", Attributes.Start(start) :: Attributes.Stop(stop) :: keyAsAttribute(key).toList)(
+      cmd.lTrim(key, start, stop)
+    )
 
-  override def lPop(key: K): F[Option[V]] = ???
+  override def lPop(key: K): F[Option[V]] =
+    span("lPop", keyAsAttribute(key).toList)(cmd.lPop(key))
 
-  override def lPush(key: K, values: V*): F[Long] = ???
+  override def lPush(key: K, values: V*): F[Long] =
+    span("lPush", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.lPush(key, values*))
 
-  override def lPushX(key: K, values: V*): F[Long] = ???
+  override def lPushX(key: K, values: V*): F[Long] =
+    span("lPushX", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.lPushX(key, values*))
 
-  override def rPop(key: K): F[Option[V]] = ???
+  override def rPop(key: K): F[Option[V]] =
+    span("rPop", keyAsAttribute(key).toList)(cmd.rPop(key))
 
-  override def rPopLPush(source: K, destination: K): F[Option[V]] = ???
+  override def rPopLPush(source: K, destination: K): F[Option[V]] =
+    span(
+      "rPopLPush",
+      keyAsAttribute(source, Attributes.Source).toList ::: keyAsAttribute(destination, Attributes.Destination).toList
+    )(
+      cmd.rPopLPush(source, destination)
+    )
 
-  override def rPush(key: K, values: V*): F[Long] = ???
+  override def rPush(key: K, values: V*): F[Long] =
+    span("rPush", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.rPush(key, values*))
 
-  override def rPushX(key: K, values: V*): F[Long] = ???
+  override def rPushX(key: K, values: V*): F[Long] =
+    span("rPushX", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.rPushX(key, values*))
 
-  override def geoDist(key: K, from: V, to: V, unit: GeoArgs.Unit): F[Double] = ???
+  override def geoDist(key: K, from: V, to: V, unit: GeoArgs.Unit): F[Double] =
+    span(
+      "geoDist",
+      Attributes.geoUnit(unit) :: keyAsAttribute(key).toList ::: valueAsAttribute(
+        from,
+        Attributes.From
+      ).toList ::: valueAsAttribute(to, Attributes.To).toList
+    )(
+      cmd.geoDist(key, from, to, unit)
+    )
 
-  override def geoHash(key: K, values: V*): F[List[Option[String]]] = ???
+  override def geoHash(key: K, values: V*): F[List[Option[String]]] =
+    span("geoHash", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.geoHash(key, values*))
 
-  override def geoPos(key: K, values: V*): F[List[effects.GeoCoordinate]] = ???
+  override def geoPos(key: K, values: V*): F[List[effects.GeoCoordinate]] =
+    span("geoPos", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.geoPos(key, values*))
 
-  override def geoRadius(key: K, geoRadius: effects.GeoRadius, unit: GeoArgs.Unit): F[Set[V]] = ???
+  override def geoRadius(key: K, geoRadius: effects.GeoRadius, unit: GeoArgs.Unit): F[Set[V]] =
+    span("geoRadius", Attributes.geoRadius(geoRadius) ::: Attributes.geoUnit(unit) :: keyAsAttribute(key).toList)(
+      cmd.geoRadius(key, geoRadius, unit)
+    )
 
   override def geoRadius(
       key: K,
       geoRadius: effects.GeoRadius,
       unit: GeoArgs.Unit,
       args: GeoArgs
-  ): F[List[effects.GeoRadiusResult[V]]] = ???
+  ): F[List[effects.GeoRadiusResult[V]]] =
+    span("geoRadius", Attributes.geoRadius(geoRadius) ::: Attributes.geoUnit(unit) :: keyAsAttribute(key).toList)(
+      cmd.geoRadius(key, geoRadius, unit, args)
+    )
 
-  override def geoRadiusByMember(key: K, value: V, dist: effects.Distance, unit: GeoArgs.Unit): F[Set[V]] = ???
+  override def geoRadiusByMember(key: K, value: V, dist: effects.Distance, unit: GeoArgs.Unit): F[Set[V]] =
+    span(
+      "geoRadiusByMember",
+      Attributes.distance(dist) :: Attributes
+        .geoUnit(unit) :: keyAsAttribute(key).toList ::: valueAsAttribute(value).toList
+    )(
+      cmd.geoRadiusByMember(key, value, dist, unit)
+    )
 
   override def geoRadiusByMember(
       key: K,
@@ -611,23 +685,47 @@ class TracedRedisCommands[F[_], K, V](
       dist: effects.Distance,
       unit: GeoArgs.Unit,
       args: GeoArgs
-  ): F[List[effects.GeoRadiusResult[V]]] = ???
+  ): F[List[effects.GeoRadiusResult[V]]] =
+    span(
+      "geoRadiusByMember",
+      Attributes.geoArgs(args) :: Attributes.distance(dist) :: Attributes.geoUnit(unit) ::
+        keyAsAttribute(key).toList ::: valueAsAttribute(value).toList
+    )(
+      cmd.geoRadiusByMember(key, value, dist, unit, args)
+    )
 
-  override def geoAdd(key: K, geoValues: effects.GeoLocation[V]*): F[Unit] = ???
+  override def geoAdd(key: K, geoValues: effects.GeoLocation[V]*): F[Unit] =
+    span(
+      "geoAdd",
+      keyAsAttribute(key).toList ::: recordValue.map(f => Attributes.GeoValues(geoValues.map(_.map(f).show))).toList
+    )(
+      cmd.geoAdd(key, geoValues*)
+    )
 
   override def geoRadius(
       key: K,
       geoRadius: effects.GeoRadius,
       unit: GeoArgs.Unit,
       storage: effects.GeoRadiusKeyStorage[K]
-  ): F[Unit] = ???
+  ): F[Unit] =
+    span(
+      "geoRadius",
+      Attributes.geoRadius(geoRadius) ::: Attributes.geoUnit(unit) :: keyAsAttribute(key).toList :::
+        recordKey.map(storage.map).toList.flatMap(Attributes.geoRadiusKeyStorage)
+    )(
+      cmd.geoRadius(key, geoRadius, unit, storage)
+    )
 
   override def geoRadius(
       key: K,
       geoRadius: effects.GeoRadius,
       unit: GeoArgs.Unit,
       storage: effects.GeoRadiusDistStorage[K]
-  ): F[Unit] = ???
+  ): F[Unit] = span(
+    "geoRadius",
+    Attributes.geoRadius(geoRadius) ::: Attributes.geoUnit(unit) :: keyAsAttribute(key).toList :::
+      recordKey.map(storage.map).toList.flatMap(Attributes.geoRadiusDistStorage)
+  )(cmd.geoRadius(key, geoRadius, unit, storage))
 
   override def geoRadiusByMember(
       key: K,
@@ -635,7 +733,14 @@ class TracedRedisCommands[F[_], K, V](
       dist: effects.Distance,
       unit: GeoArgs.Unit,
       storage: effects.GeoRadiusKeyStorage[K]
-  ): F[Unit] = ???
+  ): F[Unit] = span(
+    "geoRadiusByMember",
+    Attributes.distance(dist) :: Attributes.geoUnit(unit) :: keyAsAttribute(key).toList :::
+      valueAsAttribute(value).toList :::
+      recordKey.map(storage.map).toList.flatMap(Attributes.geoRadiusKeyStorage)
+  )(
+    cmd.geoRadiusByMember(key, value, dist, unit, storage)
+  )
 
   override def geoRadiusByMember(
       key: K,
@@ -643,241 +748,432 @@ class TracedRedisCommands[F[_], K, V](
       dist: effects.Distance,
       unit: GeoArgs.Unit,
       storage: effects.GeoRadiusDistStorage[K]
-  ): F[Unit] = ???
+  ): F[Unit] =
+    span(
+      "geoRadiusByMember",
+      Attributes.distance(dist) :: Attributes.geoUnit(unit) :: keyAsAttribute(key).toList :::
+        valueAsAttribute(value).toList :::
+        recordKey.map(storage.map).toList.flatMap(Attributes.geoRadiusDistStorage)
+    )(
+      cmd.geoRadiusByMember(key, value, dist, unit, storage)
+    )
 
-  override def ping: F[String] = ???
+  override def ping: F[String] =
+    span("ping")(cmd.ping)
 
-  override def select(index: Int): F[Unit] = ???
+  override def select(index: Int): F[Unit] =
+    span("select", Attributes.Index(index.toLong) :: Nil)(cmd.select(index))
 
-  override def auth(password: CharSequence): F[Boolean] = ???
+  override def auth(password: CharSequence): F[Boolean] =
+    span("auth (password)", Nil)(cmd.auth(password))
 
-  override def auth(username: String, password: CharSequence): F[Boolean] = ???
+  override def auth(username: String, password: CharSequence): F[Boolean] =
+    span("auth (username & password)", Nil)(cmd.auth(username, password))
 
-  override def setClientName(name: K): F[Boolean] = ???
+  override def setClientName(name: K): F[Boolean] =
+    span("setClientName", keyAsAttribute(name, Attributes.Name).toList)(cmd.setClientName(name))
 
-  override def getClientName(): F[Option[K]] = ???
+  override def getClientName(): F[Option[K]] =
+    span("getClientName")(cmd.getClientName)
 
-  override def getClientId(): F[Long] = ???
+  override def getClientId(): F[Long] =
+    span("getClientId")(cmd.getClientId)
 
-  override def getClientInfo: F[Map[String, String]] = ???
+  override def getClientInfo: F[Map[String, String]] =
+    span("getClientInfo")(cmd.getClientInfo)
 
-  override def setLibName(name: String): F[Boolean] = ???
+  override def setLibName(name: String): F[Boolean] =
+    span("setLibName", Attributes.Name(name) :: Nil)(cmd.setLibName(name))
 
-  override def setLibVersion(version: String): F[Boolean] = ???
+  override def setLibVersion(version: String): F[Boolean] =
+    span("setLibVersion", Attributes.Version(version) :: Nil)(cmd.setLibVersion(version))
 
-  override def keys(key: K): F[List[K]] = ???
+  override def keys(key: K): F[List[K]] =
+    span("keys", keyAsAttribute(key).toList)(cmd.keys(key))
 
-  override def flushAll: F[Unit] = ???
+  override def flushAll: F[Unit] =
+    span("flushAll")(cmd.flushAll)
 
-  override def flushAll(mode: effects.FlushMode): F[Unit] = ???
+  override def flushAll(mode: effects.FlushMode): F[Unit] =
+    span("flushAll", Attributes.FlushMode(mode.show) :: Nil)(cmd.flushAll(mode))
 
-  override def flushDb: F[Unit] = ???
+  override def flushDb: F[Unit] =
+    span("flushDb")(cmd.flushDb)
 
-  override def flushDb(mode: effects.FlushMode): F[Unit] = ???
+  override def flushDb(mode: effects.FlushMode): F[Unit] =
+    span("flushDb", Attributes.FlushMode(mode.show) :: Nil)(cmd.flushDb(mode))
 
-  override def info: F[Map[String, String]] = ???
+  override def info: F[Map[String, String]] =
+    span("info")(cmd.info)
 
-  override def info(section: String): F[Map[String, String]] = ???
+  override def info(section: String): F[Map[String, String]] =
+    span("info", Attributes.Section(section) :: Nil)(cmd.info(section))
 
-  override def dbsize: F[Long] = ???
+  override def dbsize: F[Long] =
+    span("dbsize")(cmd.dbsize)
 
-  override def lastSave: F[Instant] = ???
+  override def lastSave: F[Instant] =
+    span("lastSave")(cmd.lastSave)
 
-  override def slowLogLen: F[Long] = ???
+  override def slowLogLen: F[Long] =
+    span("slowLogLen")(cmd.slowLogLen)
 
-  override def multi: F[Unit] = ???
+  override def multi: F[Unit] =
+    span("multi")(cmd.multi)
 
-  override def exec: F[Unit] = ???
+  override def exec: F[Unit] =
+    span("exec")(cmd.exec)
 
-  override def discard: F[Unit] = ???
+  override def discard: F[Unit] =
+    span("discard")(cmd.discard)
 
-  override def watch(keys: K*): F[Unit] = ???
+  override def watch(keys: K*): F[Unit] =
+    span("watch", keys2AsAttribute(keys).toList)(cmd.watch(keys: _*))
 
-  override def unwatch: F[Unit] = ???
+  override def unwatch: F[Unit] =
+    span("unwatch")(cmd.unwatch)
 
-  override def transact[A](fs: TxStore[F, String, A] => List[F[Unit]]): F[Map[String, A]] = ???
+  override def transact[A](fs: TxStore[F, String, A] => List[F[Unit]]): F[Map[String, A]] =
+    span("transact")(cmd.transact(fs))
 
-  override def transact_(fs: List[F[Unit]]): F[Unit] = ???
+  override def transact_(fs: List[F[Unit]]): F[Unit] =
+    span("transact_", Attributes.EffectCount(fs.length.toLong) :: Nil)(cmd.transact_(fs))
 
-  override def pipeline[A](fs: TxStore[F, String, A] => List[F[Unit]]): F[Map[String, A]] = ???
+  override def pipeline[A](fs: TxStore[F, String, A] => List[F[Unit]]): F[Map[String, A]] =
+    span("pipeline")(cmd.pipeline(fs))
 
-  override def pipeline_(fs: List[F[Unit]]): F[Unit] = ???
+  override def pipeline_(fs: List[F[Unit]]): F[Unit] =
+    span("pipeline_", Attributes.EffectCount(fs.length.toLong) :: Nil)(cmd.pipeline_(fs))
 
-  override def enableAutoFlush: F[Unit] = ???
+  override def enableAutoFlush: F[Unit] =
+    span("enableAutoFlush")(cmd.enableAutoFlush)
 
-  override def disableAutoFlush: F[Unit] = ???
+  override def disableAutoFlush: F[Unit] =
+    span("disableAutoFlush")(cmd.disableAutoFlush)
 
-  override def flushCommands: F[Unit] = ???
+  override def flushCommands: F[Unit] =
+    span("flushCommands")(cmd.flushCommands)
 
-  override def eval(script: String, output: effects.ScriptOutputType[V]): F[output.R] = ???
+  override def eval(script: String, output: effects.ScriptOutputType[V]): F[output.R] =
+    span("eval", Nil)(cmd.eval(script, output))
 
-  override def eval(script: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] = ???
+  override def eval(script: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] =
+    span("eval", keys2AsAttribute(keys).toList)(cmd.eval(script, output, keys))
 
   override def eval(script: String, output: effects.ScriptOutputType[V], keys: List[K], values: List[V]): F[output.R] =
-    ???
+    span("eval", keys2AsAttribute(keys).toList ++ values2AsAttribute(values).toList)(
+      cmd.eval(script, output, keys, values)
+    )
 
-  override def evalReadOnly(script: String, output: effects.ScriptOutputType[V]): F[output.R] = ???
+  override def evalReadOnly(script: String, output: effects.ScriptOutputType[V]): F[output.R] =
+    span("evalReadOnly", Nil)(cmd.evalReadOnly(script, output))
 
-  override def evalReadOnly(script: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] = ???
+  override def evalReadOnly(script: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] =
+    span("evalReadOnly", keys2AsAttribute(keys).toList)(cmd.evalReadOnly(script, output, keys))
 
   override def evalReadOnly(
       script: String,
       output: effects.ScriptOutputType[V],
       keys: List[K],
       values: List[V]
-  ): F[output.R] = ???
+  ): F[output.R] =
+    span("evalReadOnly", keys2AsAttribute(keys).toList ++ values2AsAttribute(values).toList)(
+      cmd.evalReadOnly(script, output, keys, values)
+    )
 
-  override def evalSha(digest: String, output: effects.ScriptOutputType[V]): F[output.R] = ???
+  override def evalSha(digest: String, output: effects.ScriptOutputType[V]): F[output.R] =
+    span("evalSha", Attributes.Digest(digest) :: Nil)(cmd.evalSha(digest, output))
 
-  override def evalSha(digest: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] = ???
+  override def evalSha(digest: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] =
+    span("evalSha", Attributes.Digest(digest) :: keys2AsAttribute(keys).toList)(cmd.evalSha(digest, output, keys))
 
   override def evalSha(
       digest: String,
       output: effects.ScriptOutputType[V],
       keys: List[K],
       values: List[V]
-  ): F[output.R] = ???
+  ): F[output.R] =
+    span("evalSha", Attributes.Digest(digest) :: keys2AsAttribute(keys).toList ++ values2AsAttribute(values).toList)(
+      cmd.evalSha(digest, output, keys, values)
+    )
 
-  override def evalShaReadOnly(digest: String, output: effects.ScriptOutputType[V]): F[output.R] = ???
+  override def evalShaReadOnly(digest: String, output: effects.ScriptOutputType[V]): F[output.R] =
+    span("evalShaReadOnly", Attributes.Digest(digest) :: Nil)(cmd.evalShaReadOnly(digest, output))
 
   override def evalShaReadOnly(digest: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] =
-    ???
+    span("evalShaReadOnly", Attributes.Digest(digest) :: keys2AsAttribute(keys).toList)(
+      cmd.evalShaReadOnly(digest, output, keys)
+    )
 
   override def evalShaReadOnly(
       digest: String,
       output: effects.ScriptOutputType[V],
       keys: List[K],
       values: List[V]
-  ): F[output.R] = ???
+  ): F[output.R] =
+    span(
+      "evalShaReadOnly",
+      Attributes.Digest(digest) :: keys2AsAttribute(keys).toList ++ values2AsAttribute(values).toList
+    )(
+      cmd.evalShaReadOnly(digest, output, keys, values)
+    )
 
-  override def scriptLoad(script: String): F[String] = ???
+  override def scriptLoad(script: String): F[String] =
+    span("scriptLoad")(cmd.scriptLoad(script))
 
-  override def scriptLoad(script: Array[Byte]): F[String] = ???
+  override def scriptLoad(script: Array[Byte]): F[String] =
+    span("scriptLoad")(cmd.scriptLoad(script))
 
-  override def scriptExists(digests: String*): F[List[Boolean]] = ???
+  override def scriptExists(digests: String*): F[List[Boolean]] =
+    span("scriptExists", Attributes.Digests(digests) :: Nil)(cmd.scriptExists(digests*))
 
-  override def scriptFlush: F[Unit] = ???
+  override def scriptFlush: F[Unit] =
+    span("scriptFlush")(cmd.scriptFlush)
 
-  override def digest(script: String): F[String] = ???
+  override def digest(script: String): F[String] =
+    span("digest")(cmd.digest(script))
 
-  override def fcall(function: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] = ???
+  override def fcall(function: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] =
+    span("fcall", Attributes.Function(function) :: keys2AsAttribute(keys).toList)(cmd.fcall(function, output, keys))
 
   override def fcall(
       function: String,
       output: effects.ScriptOutputType[V],
       keys: List[K],
       values: List[V]
-  ): F[output.R] = ???
+  ): F[output.R] =
+    span("fcall", Attributes.Function(function) :: keys2AsAttribute(keys).toList ++ values2AsAttribute(values).toList)(
+      cmd.fcall(function, output, keys, values)
+    )
 
   override def fcallReadOnly(function: String, output: effects.ScriptOutputType[V], keys: List[K]): F[output.R] =
-    ???
+    span("fcallReadOnly", Attributes.Function(function) :: keys2AsAttribute(keys).toList)(
+      cmd.fcallReadOnly(function, output, keys)
+    )
 
   override def fcallReadOnly(
       function: String,
       output: effects.ScriptOutputType[V],
       keys: List[K],
       values: List[V]
-  ): F[output.R] = ???
+  ): F[output.R] =
+    span(
+      "fcallReadOnly",
+      Attributes.Function(function) :: keys2AsAttribute(keys).toList ++ values2AsAttribute(values).toList
+    )(
+      cmd.fcallReadOnly(function, output, keys, values)
+    )
 
-  override def functionLoad(functionCode: String): F[String] = ???
+  override def functionLoad(functionCode: String): F[String] =
+    span("functionLoad")(cmd.functionLoad(functionCode))
 
-  override def functionLoad(functionCode: String, replace: Boolean): F[String] = ???
+  override def functionLoad(functionCode: String, replace: Boolean): F[String] =
+    span("functionLoad", Attributes.Replace(replace) :: Nil)(cmd.functionLoad(functionCode, replace))
 
-  override def functionDump(): F[Array[Byte]] = ???
+  override def functionDump(): F[Array[Byte]] =
+    span("functionDump")(cmd.functionDump())
 
-  override def functionRestore(dump: Array[Byte]): F[String] = ???
+  override def functionRestore(dump: Array[Byte]): F[String] =
+    span("functionRestore")(cmd.functionRestore(dump))
 
-  override def functionRestore(dump: Array[Byte], mode: effects.FunctionRestoreMode): F[String] = ???
+  override def functionRestore(dump: Array[Byte], mode: effects.FunctionRestoreMode): F[String] =
+    span("functionRestore", Attributes.FunctionRestoreMode(mode.show) :: Nil)(cmd.functionRestore(dump, mode))
 
-  override def functionFlush(flushMode: effects.FlushMode): F[String] = ???
+  override def functionFlush(flushMode: effects.FlushMode): F[String] =
+    span("functionFlush", Attributes.FlushMode(flushMode.show) :: Nil)(cmd.functionFlush(flushMode))
 
-  override def functionKill(): F[String] = ???
+  override def functionKill(): F[String] =
+    span("functionKill")(cmd.functionKill())
 
-  override def functionList(): F[List[Map[String, Any]]] = ???
+  override def functionList(): F[List[Map[String, Any]]] =
+    span("functionList")(cmd.functionList())
 
-  override def functionList(libraryName: String): F[List[Map[String, Any]]] = ???
+  override def functionList(libraryName: String): F[List[Map[String, Any]]] =
+    span("functionList", Attributes.LibraryName(libraryName) :: Nil)(cmd.functionList(libraryName))
 
-  override def copy(source: K, destination: K): F[Boolean] = ???
+  override def copy(source: K, destination: K): F[Boolean] =
+    span(
+      "copy",
+      keyAsAttribute(source, Attributes.Source).toList ++ keyAsAttribute(destination, Attributes.Destination).toList
+    )(cmd.copy(source, destination))
 
-  override def copy(source: K, destination: K, copyArgs: effects.CopyArgs): F[Boolean] = ???
+  override def copy(source: K, destination: K, copyArgs: effects.CopyArgs): F[Boolean] =
+    span(
+      "copy",
+      keyAsAttribute(source, Attributes.Source).toList ::: keyAsAttribute(
+        destination,
+        Attributes.Destination
+      ).toList ::: Attributes.copyArgs(copyArgs)
+    )(
+      cmd.copy(source, destination, copyArgs)
+    )
 
-  override def del(key: K*): F[Long] = ???
+  override def del(key: K*): F[Long] =
+    span("del", keys2AsAttribute(key).toList)(cmd.del(key*))
 
-  override def dump(key: K): F[Option[Array[Byte]]] = ???
+  override def dump(key: K): F[Option[Array[Byte]]] =
+    span("dump", keyAsAttribute(key).toList)(cmd.dump(key))
 
-  override def exists(key: K*): F[Boolean] = ???
+  override def exists(key: K*): F[Boolean] =
+    span("exists", keys2AsAttribute(key).toList)(cmd.exists(key*))
 
-  override def expire(key: K, expiresIn: FiniteDuration): F[Boolean] = ???
+  override def expire(key: K, expiresIn: FiniteDuration): F[Boolean] =
+    span("expire", Attributes.expiresIn(expiresIn) :: keyAsAttribute(key).toList)(cmd.expire(key, expiresIn))
 
   override def expire(key: K, expiresIn: FiniteDuration, expireExistenceArg: effects.ExpireExistenceArg): F[Boolean] =
-    ???
+    span(
+      "expire",
+      Attributes.expireExistenceArg(expireExistenceArg) :: Attributes.expiresIn(expiresIn) :: keyAsAttribute(key).toList
+    )(cmd.expire(key, expiresIn, expireExistenceArg))
 
-  override def expireAt(key: K, at: Instant): F[Boolean] = ???
+  override def expireAt(key: K, at: Instant): F[Boolean] =
+    span("expireAt", Attributes.at(at) :: keyAsAttribute(key).toList)(cmd.expireAt(key, at))
 
-  override def expireAt(key: K, at: Instant, expireExistenceArg: effects.ExpireExistenceArg): F[Boolean] = ???
+  override def expireAt(key: K, at: Instant, expireExistenceArg: effects.ExpireExistenceArg): F[Boolean] =
+    span(
+      "expireAt",
+      Attributes.expireExistenceArg(expireExistenceArg) :: Attributes.at(at) :: keyAsAttribute(key).toList
+    )(cmd.expireAt(key, at, expireExistenceArg))
 
-  override def objectIdletime(key: K): F[Option[FiniteDuration]] = ???
+  override def objectIdletime(key: K): F[Option[FiniteDuration]] =
+    span("objectIdletime", keyAsAttribute(key).toList)(cmd.objectIdletime(key))
 
-  override def persist(key: K): F[Boolean] = ???
+  override def persist(key: K): F[Boolean] =
+    span("persist", keyAsAttribute(key).toList)(cmd.persist(key))
 
-  override def pttl(key: K): F[Option[FiniteDuration]] = ???
+  override def pttl(key: K): F[Option[FiniteDuration]] =
+    span("pttl", keyAsAttribute(key).toList)(cmd.pttl(key))
 
-  override def randomKey: F[Option[K]] = ???
+  override def randomKey: F[Option[K]] =
+    span("randomKey", Nil)(cmd.randomKey)
 
-  override def restore(key: K, value: Array[Byte]): F[Unit] = ???
+  override def restore(key: K, value: Array[Byte]): F[Unit] =
+    span("restore", keyAsAttribute(key).toList)(cmd.restore(key, value))
 
-  override def restore(key: K, value: Array[Byte], restoreArgs: effects.RestoreArgs): F[Unit] = ???
+  override def restore(key: K, value: Array[Byte], restoreArgs: effects.RestoreArgs): F[Unit] =
+    span("restore", keyAsAttribute(key).toList ::: Attributes.restoreArgs(restoreArgs))(
+      cmd.restore(key, value, restoreArgs)
+    )
 
-  override def scan: F[data.KeyScanCursor[K]] = ???
+  override def scan: F[data.KeyScanCursor[K]] =
+    span("scan", Nil)(cmd.scan)
 
-  override def scan(cursor: Long): F[data.KeyScanCursor[K]] = ???
+  override def scan(cursor: Long): F[data.KeyScanCursor[K]] =
+    span("scan", Attributes.Cursor(cursor) :: Nil)(cmd.scan(cursor))
 
-  override def scan(previous: data.KeyScanCursor[K]): F[data.KeyScanCursor[K]] = ???
+  override def scan(previous: data.KeyScanCursor[K]): F[data.KeyScanCursor[K]] =
+    span("scan", mapAsAttribute(previous, recordKey, Attributes.Previous).toList)(cmd.scan(previous))
 
-  override def scan(scanArgs: effects.ScanArgs): F[data.KeyScanCursor[K]] = ???
+  override def scan(scanArgs: effects.ScanArgs): F[data.KeyScanCursor[K]] =
+    span("scan", Attributes.ScanArgs(scanArgs.show) :: Nil)(cmd.scan(scanArgs))
 
-  override def scan(keyScanArgs: effects.KeyScanArgs): F[data.KeyScanCursor[K]] = ???
+  override def scan(keyScanArgs: effects.KeyScanArgs): F[data.KeyScanCursor[K]] =
+    span("scan", Attributes.KeyScanArgs(keyScanArgs.show) :: Nil)(cmd.scan(keyScanArgs))
 
-  override def scan(cursor: Long, scanArgs: effects.ScanArgs): F[data.KeyScanCursor[K]] = ???
+  override def scan(cursor: Long, scanArgs: effects.ScanArgs): F[data.KeyScanCursor[K]] =
+    span("scan", Attributes.Cursor(cursor) :: Attributes.ScanArgs(scanArgs.show) :: Nil)(cmd.scan(cursor, scanArgs))
 
-  override def scan(previous: data.KeyScanCursor[K], scanArgs: effects.ScanArgs): F[data.KeyScanCursor[K]] = ???
+  override def scan(previous: data.KeyScanCursor[K], scanArgs: effects.ScanArgs): F[data.KeyScanCursor[K]] =
+    span(
+      "scan",
+      mapAsAttribute(previous, recordKey, Attributes.Previous).toList ::: Attributes.ScanArgs(scanArgs.show) :: Nil
+    )(cmd.scan(previous, scanArgs))
 
   override def scan(cursor: data.KeyScanCursor[K], keyScanArgs: effects.KeyScanArgs): F[data.KeyScanCursor[K]] =
-    ???
+    span(
+      "scan",
+      mapAsAttribute(cursor, recordKey, Attributes.CursorAsKeyScanCursor).toList ::: Attributes.KeyScanArgs(
+        keyScanArgs.show
+      ) :: Nil
+    )(cmd.scan(cursor, keyScanArgs))
 
-  override def typeOf(key: K): F[Option[effects.RedisType]] = ???
+  override def typeOf(key: K): F[Option[effects.RedisType]] =
+    span("typeOf", keyAsAttribute(key).toList)(cmd.typeOf(key))
 
-  override def ttl(key: K): F[Option[FiniteDuration]] = ???
+  override def ttl(key: K): F[Option[FiniteDuration]] =
+    span("ttl", keyAsAttribute(key).toList)(cmd.ttl(key))
 
-  override def unlink(key: K*): F[Long] = ???
+  override def unlink(key: K*): F[Long] =
+    span("unlink", keys2AsAttribute(key).toList)(cmd.unlink(key*))
 
-  override def pfAdd(key: K, values: V*): F[Long] = ???
+  override def pfAdd(key: K, values: V*): F[Long] =
+    span("pfAdd", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.pfAdd(key, values*))
 
-  override def pfCount(key: K): F[Long] = ???
+  override def pfCount(key: K): F[Long] =
+    span("pfCount", keyAsAttribute(key).toList)(cmd.pfCount(key))
 
-  override def pfMerge(outputKey: K, inputKeys: K*): F[Unit] = ???
+  override def pfMerge(outputKey: K, inputKeys: K*): F[Unit] =
+    span(
+      "pfMerge",
+      keyAsAttribute(outputKey, Attributes.OutputKey).toList ::: keys2AsAttribute(
+        inputKeys,
+        Attributes.InputKeys
+      ).toList
+    )(
+      cmd.pfMerge(outputKey, inputKeys*)
+    )
 
-  override def bitCount(key: K): F[Long] = ???
+  override def bitCount(key: K): F[Long] =
+    span("bitCount", keyAsAttribute(key).toList)(cmd.bitCount(key))
 
-  override def bitCount(key: K, start: Long, end: Long): F[Long] = ???
+  override def bitCount(key: K, start: Long, end: Long): F[Long] =
+    span("bitCount", Attributes.Start(start) :: Attributes.End(end) :: keyAsAttribute(key).toList)(
+      cmd.bitCount(key, start, end)
+    )
 
-  override def bitField(key: K, operations: BitCommandOperation*): F[List[Long]] = ???
+  override def bitField(key: K, operations: BitCommandOperation*): F[List[Long]] =
+    span("bitField", Attributes.operations(operations*) :: keyAsAttribute(key).toList)(
+      cmd.bitField(key, operations*)
+    )
 
-  override def bitOpAnd(destination: K, sources: K*): F[Unit] = ???
+  override def bitOpAnd(destination: K, sources: K*): F[Unit] =
+    span("bitOpAnd", keys2AsAttribute(sources).toList ::: keyAsAttribute(destination, Attributes.Destination).toList)(
+      cmd.bitOpAnd(destination, sources*)
+    )
 
-  override def bitOpNot(destination: K, source: K): F[Unit] = ???
+  override def bitOpNot(destination: K, source: K): F[Unit] =
+    span("bitOpNot", keyAsAttribute(destination, Attributes.Destination).toList ::: keyAsAttribute(source).toList)(
+      cmd.bitOpNot(destination, source)
+    )
 
-  override def bitOpOr(destination: K, sources: K*): F[Unit] = ???
+  override def bitOpOr(destination: K, sources: K*): F[Unit] =
+    span("bitOpOr", keys2AsAttribute(sources).toList ::: keyAsAttribute(destination, Attributes.Destination).toList)(
+      cmd.bitOpOr(destination, sources*)
+    )
 
-  override def bitOpXor(destination: K, sources: K*): F[Unit] = ???
+  override def bitOpXor(destination: K, sources: K*): F[Unit] =
+    span("bitOpXor", keys2AsAttribute(sources).toList ::: keyAsAttribute(destination, Attributes.Destination).toList)(
+      cmd.bitOpXor(destination, sources*)
+    )
 
-  override def bitPos(key: K, state: Boolean): F[Long] = ???
+  override def bitPos(key: K, state: Boolean): F[Long] =
+    span("bitPos", Attributes.State(state) :: keyAsAttribute(key).toList)(
+      cmd.bitPos(key, state)
+    )
 
-  override def bitPos(key: K, state: Boolean, start: Long): F[Long] = ???
+  override def bitPos(key: K, state: Boolean, start: Long): F[Long] =
+    span(
+      "bitPos",
+      Attributes.Start(start) :: Attributes.State(state) :: keyAsAttribute(key).toList
+    )(
+      cmd.bitPos(key, state, start)
+    )
 
-  override def bitPos(key: K, state: Boolean, start: Long, end: Long): F[Long] = ???
+  override def bitPos(key: K, state: Boolean, start: Long, end: Long): F[Long] =
+    span(
+      "bitPos",
+      Attributes.Start(start) :: Attributes.End(end) :: Attributes.State(state) :: keyAsAttribute(key).toList
+    )(
+      cmd.bitPos(key, state, start, end)
+    )
 
-  override def getBit(key: K, offset: Long): F[Option[Long]] = ???
+  override def getBit(key: K, offset: Long): F[Option[Long]] =
+    span("getBit", Attributes.Offset(offset) :: keyAsAttribute(key).toList)(
+      cmd.getBit(key, offset)
+    )
 
-  override def setBit(key: K, offset: Long, value: Int): F[Long] = ???
+  override def setBit(key: K, offset: Long, value: Int): F[Long] =
+    span("setBit", Attributes.Offset(offset) :: Attributes.ValueLong(value.toLong) :: keyAsAttribute(key).toList)(
+      cmd.setBit(key, offset, value)
+    )
 }
