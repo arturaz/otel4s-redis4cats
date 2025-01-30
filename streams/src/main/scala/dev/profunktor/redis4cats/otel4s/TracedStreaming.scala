@@ -1,7 +1,6 @@
 package dev.profunktor.redis4cats.otel4s
 
 import cats.Functor
-import cats.effect.kernel.Resource
 import cats.syntax.all.*
 import dev.profunktor.redis4cats.streams.Streaming
 import dev.profunktor.redis4cats.streams.data
@@ -38,7 +37,10 @@ object TracedStreaming {
 }
 trait TracedStreaming[F[_], S[_[_], _], K, V] extends Streaming[F, S, K, V] {
 
-  /** As [[read]] but returns a resource for each message that introduces a span when it is used. */
+  /** As [[read]] but returns `SpanOps` for each message that introduces a span when it is used.
+    *
+    * You must use the `SpanOps` yourself to record the span.
+    */
   def readWithTracedMessages(
       keys: Set[K],
       chunkSize: Int,
@@ -47,7 +49,7 @@ trait TracedStreaming[F[_], S[_[_], _], K, V] extends Streaming[F, S, K, V] {
       count: Option[Long],
       restartOnTimeout: Option[FiniteDuration => Boolean],
       spanName: data.XReadMessage[K, V] => String = _ => "message"
-  ): S[F, Resource[F, (SpanOps.Res[F], data.XReadMessage[K, V])]]
+  ): S[F, (SpanOps[F], data.XReadMessage[K, V])]
 }
 
 private class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
@@ -91,14 +93,16 @@ private class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
       count: Option[Long],
       restartOnTimeout: Option[FiniteDuration => Boolean],
       spanName: data.XReadMessage[K, V] => String
-  ): S[F, Resource[F, (SpanOps.Res[F], data.XReadMessage[K, V])]] =
+  ): S[F, (SpanOps[F], data.XReadMessage[K, V])] =
     read(keys, chunkSize, initialOffset, block, count, restartOnTimeout).map { msg =>
       val data.XReadMessage(messageId, key, body) = msg
 
-      spanOps(
+      val ops = spanOps(
         spanName(msg),
         Attributes.MessageId(messageId.value) :: keyAsAttribute(key).toList :::
           kvsAsAttribute(body, Attributes.Body).toList
-      ).resource.map((_, msg))
+      )
+
+      (ops, msg)
     }
 }

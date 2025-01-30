@@ -1,7 +1,6 @@
 package dev.profunktor.redis4cats.otel4s
 
 import cats.Functor
-import cats.effect.kernel.Resource
 import cats.syntax.all.*
 import dev.profunktor.redis4cats.data.RedisChannel
 import dev.profunktor.redis4cats.data.RedisPattern
@@ -37,15 +36,23 @@ object TracedSubscribeCommands {
 }
 trait TracedSubscribeCommands[F[_], S[_[_], _], K, V] extends SubscribeCommands[F, S, K, V] {
 
-  /** As [[subscribe]] but returns a resource for each event that introduces a span when it is used. */
-  def subscribeWithTracedEvents(channel: RedisChannel[K], 
-    eventName: V => String = _ => "event"): S[F, Resource[F, (SpanOps.Res[F], V)]]
+  /** As [[subscribe]] but returns `SpanOps` for each event that introduces a span when it is used.
+    *
+    * You must use the `SpanOps` yourself to record the span.
+    */
+  def subscribeWithTracedEvents(
+      channel: RedisChannel[K],
+      eventName: V => String = _ => "event"
+  ): S[F, (SpanOps[F], V)]
 
-  /** As [[psubscribe]] but returns a resource for each event that introduces a span when it is used. */
+  /** As [[psubscribe]] but returns `SpanOps` for each event that introduces a span when it is used.
+    *
+    * You must use the `SpanOps` yourself to record the span.
+    */
   def psubscribeWithTracedEvents(
       channel: RedisPattern[K],
       eventName: RedisPatternEvent[K, V] => String = _ => "event"
-  ): S[F, Resource[F, (SpanOps.Res[F], RedisPatternEvent[K, V])]]
+  ): S[F, (SpanOps[F], RedisPatternEvent[K, V])]
 }
 
 private class TracedSubscribeCommandsImplementation[F[_]: Tracer, S[_[_], _], K, V](
@@ -64,14 +71,16 @@ private class TracedSubscribeCommandsImplementation[F[_]: Tracer, S[_[_], _], K,
     cmd.subscribe(channel)
 
   override def subscribeWithTracedEvents(
-    channel: RedisChannel[K],
-    eventName: V => String
-  ): S[F, Resource[F, (SpanOps.Res[F], V)]] =
+      channel: RedisChannel[K],
+      eventName: V => String
+  ): S[F, (SpanOps[F], V)] =
     subscribe(channel).map { value =>
-      spanOps(
+      val ops = spanOps(
         eventName(value),
         keyAsAttribute(channel.underlying, Attributes.Channel).toList ::: valueAsAttribute(value).toList
-      ).resource.map((_, value))
+      )
+
+      (ops, value)
     }
 
   override def unsubscribe(channel: RedisChannel[K]): F[Unit] =
@@ -83,16 +92,18 @@ private class TracedSubscribeCommandsImplementation[F[_]: Tracer, S[_[_], _], K,
   override def psubscribeWithTracedEvents(
       channel: RedisPattern[K],
       eventName: RedisPatternEvent[K, V] => String
-  ): S[F, Resource[F, (SpanOps.Res[F], RedisPatternEvent[K, V])]] =
+  ): S[F, (SpanOps[F], RedisPatternEvent[K, V])] =
     psubscribe(channel).map { value =>
       val RedisPatternEvent(pattern, channel, data) = value
 
-      spanOps(
+      val ops = spanOps(
         eventName(value),
         keyAsAttribute(pattern, Attributes.Pattern).toList :::
           keyAsAttribute(channel, Attributes.Channel).toList :::
           valueAsAttribute(data, Attributes.Data).toList
-      ).resource.map((_, value))
+      )
+
+      (ops, value)
     }
 
   override def punsubscribe(channel: RedisPattern[K]): F[Unit] =
