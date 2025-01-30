@@ -15,9 +15,6 @@ import io.lettuce.core.ZAddArgs
 import io.lettuce.core.ZAggregateArgs
 import io.lettuce.core.ZStoreArgs
 import io.lettuce.core.cluster.api.async.RedisClusterAsyncCommands
-import org.typelevel.otel4s.Attribute
-import org.typelevel.otel4s.AttributeKey
-import org.typelevel.otel4s.trace.SpanBuilder
 import org.typelevel.otel4s.trace.Tracer
 import org.typelevel.otel4s.trace.TracerProvider
 
@@ -27,172 +24,41 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration
 
 object TracedRedisCommands {
-  /** 
-   * @param configureSpanBuilder 
-   *   A function that configures a span builder.
-   * @param recordKey 
-   *   A function that converts keys of a command to strings. If `None`, the keys will not be recorded.
-   * @param recordValue 
-   *   A function that converts values of a command to strings. If `None`, the values will not be recorded.
-   */
-  case class Config[F[_], K, V](
-      configureSpanBuilder: SpanBuilder[F] => SpanBuilder[F],
-      recordKey: Option[K => String],
-      recordValue: Option[V => String]
-  )
 
   /** Constructor for [[TracerProvider]]. */
   def apply[F[_]: Functor, K, V](
       cmd: RedisCommands[F, K, V],
-      config: Config[F, K, V]
+      config: TracedRedisConfig[F, K, V]
   )(implicit tracerProvider: TracerProvider[F]): F[RedisCommands[F, K, V]] = {
-    tracerProvider.tracer("dev.profunktor.redis4cats.otel4s").withVersion(buildinfo.BuildInfo.version).get.map { tracer =>
-      fromTracer(cmd, config)(tracer)
-    }
+    tracerProvider
+      .tracer("dev.profunktor.redis4cats.otel4s.TracedRedisCommands")
+      .withVersion(buildinfo.BuildInfo.version)
+      .get
+      .map { implicit tracer =>
+        fromTracer(cmd, config)
+      }
   }
 
   /** Constructor for [[Tracer]]. */
-  def fromTracer[F[_], K, V](
-      cmd: RedisCommands[F, K, V], 
-      config: Config[F, K, V]
-  )(implicit tracer: Tracer[F]): RedisCommands[F, K, V] = {
-    new TracedRedisCommands(config, tracer, cmd)
+  def fromTracer[F[_]: Tracer, K, V](
+      cmd: RedisCommands[F, K, V],
+      config: TracedRedisConfig[F, K, V]
+  ): RedisCommands[F, K, V] = {
+    new TracedRedisCommands(config, cmd)
   }
 }
 @nowarn("cat=deprecation")
-class TracedRedisCommands[F[_], K, V](
-    config: TracedRedisCommands.Config[F, K, V],
-    tracer: Tracer[F],
+class TracedRedisCommands[F[_]: Tracer, K, V](
+    config: TracedRedisConfig[F, K, V],
     cmd: RedisCommands[F, K, V]
-) extends RedisCommands[F, K, V] {
-  import Implicits.*
-  import Helpers.*
+) extends RedisCommands[F, K, V]
+    with CoreHelpers[K, V] {
+  import EffectsImplicits.*
   import config.*
-  val Attributes = Otel4sRedisAttributes
+  private def Attributes = EffectsAttributes
 
-  // We use raw pattern matching in these helpers for performance.
-  object Helpers {
-    def mapToString[Value[_], A](value: Value[A], mapper: Option[A => String])(implicit
-        toString: ToString[Value]
-    ): Option[String] =
-      mapper.map(toString(value, _))
-
-    def mapToStrings[Value[_], A](value: Value[A], mapper: Option[A => String])(implicit
-        toString: ToStrings[Value]
-    ): Option[Seq[String]] =
-      mapper.map(toString(value, _))
-
-    def mapAsAttribute[Value[_], A](
-        value: Value[A],
-        mapper: Option[A => String]
-    )(implicit
-        ev: Attributes.KeyFor[Value[A]] { type Out = String },
-        toString: ToString[Value]
-    ): Option[Attribute[String]] =
-      mapToString(value, mapper).map(ev.key(_))
-
-    def mapAsAttribute[Value[_], A](
-        value: Value[A],
-        mapper: Option[A => String],
-        attr: AttributeKey[Seq[String]]
-    )(implicit toStrings: ToStrings[Value]): Option[Attribute[Seq[String]]] =
-      mapToStrings(value, mapper).map(attr(_))
-
-    def map[A](
-        scoreWithValue: effects.ScoreWithValue[A],
-        mapper: Option[A => String]
-    ): Option[effects.ScoreWithValue[String]] = mapper match {
-      case None         => None
-      case Some(mapper) => Some(effects.ScoreWithValue(scoreWithValue.score, mapper(scoreWithValue.value)))
-    }
-
-    def span[A](name: String, attributes: collection.immutable.Iterable[Attribute[_]] = Nil)(fa: F[A]): F[A] =
-      configureSpanBuilder(tracer.spanBuilder(name).addAttributes(attributes)).build.surround(fa)
-
-    def maybeMappableValueAsAttribute[A](
-        maybeMapper: Option[A => String],
-        value: A,
-        attr: AttributeKey[String]
-    ): Option[Attribute[String]] =
-      maybeMapper match {
-        case None         => None
-        case Some(mapper) => Some(attr(mapper(value)))
-      }
-
-    def maybeMappableValuesAsAttribute[A](
-        maybeMapper: Option[A => String],
-        value: A,
-        others: Iterable[A],
-        attr: AttributeKey[Seq[String]]
-    ): Option[Attribute[Seq[String]]] =
-      maybeMapper match {
-        case None         => None
-        case Some(mapper) => Some(attr((Iterator(value) ++ others.iterator).map(mapper).toSeq))
-      }
-
-    def maybeMappableValuesAsAttribute[A](
-        maybeMapper: Option[A => String],
-        values: Iterable[A],
-        attr: AttributeKey[Seq[String]]
-    ): Option[Attribute[Seq[String]]] =
-      maybeMapper match {
-        case None         => None
-        case Some(mapper) => Some(attr(values.iterator.map(mapper).toSeq))
-      }
-
-    def keyAsAttribute(key: K, attr: AttributeKey[String] = Attributes.Key): Option[Attribute[String]] =
-      maybeMappableValueAsAttribute(recordKey, key, attr)
-
-    def keysAsAttribute(
-        key: K,
-        others: Iterable[K],
-        attr: AttributeKey[Seq[String]] = Attributes.Keys
-    ): Option[Attribute[Seq[String]]] =
-      maybeMappableValuesAsAttribute(recordKey, key, others, attr)
-
-    def keys2AsAttribute(
-        keys: Iterable[K],
-        attr: AttributeKey[Seq[String]] = Attributes.Keys
-    ): Option[Attribute[Seq[String]]] =
-      maybeMappableValuesAsAttribute(recordKey, keys, attr)
-
-    def valueAsAttribute(value: V, attr: AttributeKey[String] = Attributes.Value): Option[Attribute[String]] =
-      maybeMappableValueAsAttribute(recordValue, value, attr)
-
-    def valuesAsAttribute(
-        value: V,
-        others: Iterable[V],
-        attr: AttributeKey[Seq[String]] = Attributes.Values
-    ): Option[Attribute[Seq[String]]] =
-      maybeMappableValuesAsAttribute(recordValue, value, others, attr)
-
-    def values2AsAttribute(
-        values: Iterable[V],
-        attr: AttributeKey[Seq[String]] = Attributes.Values
-    ): Option[Attribute[Seq[String]]] =
-      maybeMappableValuesAsAttribute(recordValue, values, attr)
-
-    def kvsAsAttribute(
-        kvs: Map[K, V],
-        attr: AttributeKey[Seq[String]] = Attributes.KeyValuePairs
-    ): Option[Attribute[Seq[String]]] = recordKey match {
-      case None => None
-      case Some(kFn) =>
-        recordValue match {
-          case None =>
-            Some(attr(kvs.keysIterator.map(k => s"${kFn(k)}=<unserialized>").toSeq))
-          case Some(vFn) =>
-            Some(attr(kvs.iterator.map { case (k, v) => s"${kFn(k)}=${vFn(v)}" }.toSeq))
-        }
-    }
-
-    def kvAsAttributes(key: K, value: V): List[Attribute[String]] = {
-      keyAsAttribute(key) match {
-        case None               => valueAsAttribute(value).toList
-        case Some(keyAttribute) => keyAttribute :: valueAsAttribute(value).toList
-      }
-    }
-  }
+  override def recordKey = config.recordKey
+  override def recordValue = config.recordValue
 
   override def get(key: K): F[Option[V]] =
     span("get", keyAsAttribute(key).toList)(cmd.get(key))
@@ -791,10 +657,10 @@ class TracedRedisCommands[F[_], K, V](
     span("setClientName", keyAsAttribute(name, Attributes.Name).toList)(cmd.setClientName(name))
 
   override def getClientName(): F[Option[K]] =
-    span("getClientName")(cmd.getClientName)
+    span("getClientName")(cmd.getClientName())
 
   override def getClientId(): F[Long] =
-    span("getClientId")(cmd.getClientId)
+    span("getClientId")(cmd.getClientId())
 
   override def getClientInfo: F[Map[String, String]] =
     span("getClientInfo")(cmd.getClientInfo)
