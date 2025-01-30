@@ -68,7 +68,7 @@ private class TracedSubscribeCommandsImplementation[F[_]: Tracer, S[_[_], _], K,
     eventName: V => String
   ): S[F, Resource[F, (SpanOps.Res[F], V)]] =
     subscribe(channel).map { value =>
-      spanBuilder(
+      spanOps(
         eventName(value),
         keyAsAttribute(channel.underlying, Attributes.Channel).toList ::: valueAsAttribute(value).toList
       ).resource.map((_, value))
@@ -87,7 +87,7 @@ private class TracedSubscribeCommandsImplementation[F[_]: Tracer, S[_[_], _], K,
     psubscribe(channel).map { value =>
       val RedisPatternEvent(pattern, channel, data) = value
 
-      spanBuilder(
+      spanOps(
         eventName(value),
         keyAsAttribute(pattern, Attributes.Pattern).toList :::
           keyAsAttribute(channel, Attributes.Channel).toList :::

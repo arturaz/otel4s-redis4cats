@@ -31,8 +31,20 @@ case class TracedRedisConfig[F[_], K, V](
     */
   def spanBuilder(name: String, attributes: collection.immutable.Iterable[Attribute[_]] = Nil)(implicit
       tracer: Tracer[F]
+  ): SpanBuilder[F] =
+    configureSpanBuilder(tracer.spanBuilder(spanName(name)).addAttributes(attributes), name)
+
+  /** Returns a span builder.
+    *
+    * @param name
+    *   The name of the span.
+    * @param attributes
+    *   A collection of attributes to add to the span.
+    */
+  def spanOps(name: String, attributes: collection.immutable.Iterable[Attribute[_]] = Nil)(implicit
+      tracer: Tracer[F]
   ): SpanOps[F] =
-    configureSpanBuilder(tracer.spanBuilder(spanName(name)).addAttributes(attributes), name).build
+    spanBuilder(name, attributes).build
 
   /** Surrounds the `F[A]` with a span.
     *
@@ -44,5 +56,5 @@ case class TracedRedisConfig[F[_], K, V](
   def span[A](name: String, attributes: collection.immutable.Iterable[Attribute[_]] = Nil)(fa: F[A])(implicit
       tracer: Tracer[F]
   ): F[A] =
-    spanBuilder(name, attributes).surround(fa)
+    spanOps(name, attributes).surround(fa)
 }

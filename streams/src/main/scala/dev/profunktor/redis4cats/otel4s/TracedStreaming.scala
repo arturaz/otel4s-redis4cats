@@ -95,7 +95,7 @@ private class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
     read(keys, chunkSize, initialOffset, block, count, restartOnTimeout).map { msg =>
       val data.XReadMessage(messageId, key, body) = msg
 
-      spanBuilder(
+      spanOps(
         spanName(msg),
         Attributes.MessageId(messageId.value) :: keyAsAttribute(key).toList :::
           kvsAsAttribute(body, Attributes.Body).toList
