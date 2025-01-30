@@ -72,11 +72,12 @@ class TracedPubSubCommandsImplementation[F[_], S[_[_], _], K, V](
 
   override def punsubscribe(channel: RedisPattern[K]): F[Unit] = sub.punsubscribe(channel)
 
-  override def subscribeWithTracedEvents(channel: RedisChannel[K]) =
-    sub.subscribeWithTracedEvents(channel)
+  override def subscribeWithTracedEvents(channel: RedisChannel[K], eventName: V => String) =
+    sub.subscribeWithTracedEvents(channel, eventName)
 
   override def psubscribeWithTracedEvents(
-      channel: RedisPattern[K]
-  ) = sub.psubscribeWithTracedEvents(channel)
+      channel: RedisPattern[K],
+      eventName: RedisPatternEvent[K, V] => String
+  ) = sub.psubscribeWithTracedEvents(channel, eventName)
 
 }

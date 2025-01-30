@@ -45,11 +45,12 @@ trait TracedStreaming[F[_], S[_[_], _], K, V] extends Streaming[F, S, K, V] {
       initialOffset: K => data.StreamingOffset[K],
       block: Option[Duration],
       count: Option[Long],
-      restartOnTimeout: Option[FiniteDuration => Boolean]
+      restartOnTimeout: Option[FiniteDuration => Boolean],
+      spanName: data.XReadMessage[K, V] => String = _ => "message"
   ): S[F, Resource[F, (SpanOps.Res[F], data.XReadMessage[K, V])]]
 }
 
-class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
+private class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
     config: TracedRedisConfig[F, K, V],
     cmd: Streaming[F, S, K, V]
 )(implicit SFunctor: Functor[S[F, *]])
@@ -88,13 +89,14 @@ class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
       initialOffset: K => data.StreamingOffset[K],
       block: Option[Duration],
       count: Option[Long],
-      restartOnTimeout: Option[FiniteDuration => Boolean]
+      restartOnTimeout: Option[FiniteDuration => Boolean],
+      spanName: data.XReadMessage[K, V] => String
   ): S[F, Resource[F, (SpanOps.Res[F], data.XReadMessage[K, V])]] =
     read(keys, chunkSize, initialOffset, block, count, restartOnTimeout).map { msg =>
       val data.XReadMessage(messageId, key, body) = msg
 
       spanBuilder(
-        "message",
+        spanName(msg),
         Attributes.MessageId(messageId.value) :: keyAsAttribute(key).toList :::
           kvsAsAttribute(body, Attributes.Body).toList
       ).resource.map((_, msg))
