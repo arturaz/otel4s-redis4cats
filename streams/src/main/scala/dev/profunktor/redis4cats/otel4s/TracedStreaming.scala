@@ -14,10 +14,10 @@ import scala.concurrent.duration.FiniteDuration
 object TracedStreaming {
 
   /** Constructor for [[TracerProvider]]. */
-  def apply[F[_]: Functor, S[_[_], _], K, V](
+  def apply[F[_]: Functor, S[_], K, V](
       cmd: Streaming[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
-  )(implicit tracerProvider: TracerProvider[F], SFunctor: Functor[S[F, *]]): F[TracedStreaming[F, S, K, V]] = {
+  )(implicit tracerProvider: TracerProvider[F], SFunctor: Functor[S[*]]): F[TracedStreaming[F, S, K, V]] = {
     tracerProvider
       .tracer("dev.profunktor.redis4cats.otel4s.TracedStreaming")
       .withVersion(buildinfo.BuildInfo.version)
@@ -28,14 +28,14 @@ object TracedStreaming {
   }
 
   /** Constructor for [[Tracer]]. */
-  def fromTracer[F[_]: Tracer, S[_[_], _], K, V](
+  def fromTracer[F[_]: Tracer, S[_], K, V](
       cmd: Streaming[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
-  )(implicit SFunctor: Functor[S[F, *]]): TracedStreaming[F, S, K, V] = {
+  )(implicit SFunctor: Functor[S[*]]): TracedStreaming[F, S, K, V] = {
     new TracedStreamingImplementation(config, cmd)
   }
 }
-trait TracedStreaming[F[_], S[_[_], _], K, V] extends Streaming[F, S, K, V] {
+trait TracedStreaming[F[_], S[_], K, V] extends Streaming[F, S, K, V] {
 
   /** As [[read]] but returns `SpanOps` for each message that introduces a span when it is used.
     *
@@ -49,13 +49,13 @@ trait TracedStreaming[F[_], S[_[_], _], K, V] extends Streaming[F, S, K, V] {
       count: Option[Long],
       restartOnTimeout: Option[FiniteDuration => Boolean],
       spanName: data.XReadMessage[K, V] => String = _ => "message"
-  ): S[F, (SpanOps[F], data.XReadMessage[K, V])]
+  ): S[(SpanOps[F], data.XReadMessage[K, V])]
 }
 
-private class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
+private class TracedStreamingImplementation[F[_]: Tracer, S[_], K, V](
     config: TracedRedisConfig[F, K, V],
     cmd: Streaming[F, S, K, V]
-)(implicit SFunctor: Functor[S[F, *]])
+)(implicit SFunctor: Functor[S[*]])
     extends TracedStreaming[F, S, K, V]
     with CoreHelpers[K, V] {
   import config.*
@@ -64,7 +64,7 @@ private class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
   override def recordKey = config.recordKey
   override def recordValue = config.recordValue
 
-  override def append: S[F, data.XAddMessage[K, V]] => S[F, data.MessageId] = cmd.append
+  override def append: S[data.XAddMessage[K, V]] => S[data.MessageId] = cmd.append
 
   override def append(message: data.XAddMessage[K, V]): F[data.MessageId] = {
     val data.XAddMessage(key, body, approxMaxlen, minId) = message
@@ -93,7 +93,7 @@ private class TracedStreamingImplementation[F[_]: Tracer, S[_[_], _], K, V](
       count: Option[Long],
       restartOnTimeout: Option[FiniteDuration => Boolean],
       spanName: data.XReadMessage[K, V] => String
-  ): S[F, (SpanOps[F], data.XReadMessage[K, V])] =
+  ): S[(SpanOps[F], data.XReadMessage[K, V])] =
     read(keys, chunkSize, initialOffset, block, count, restartOnTimeout).map { msg =>
       val data.XReadMessage(messageId, key, body) = msg
 

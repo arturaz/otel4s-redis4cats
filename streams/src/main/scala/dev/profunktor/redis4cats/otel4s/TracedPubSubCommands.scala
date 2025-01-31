@@ -11,10 +11,10 @@ import org.typelevel.otel4s.trace.TracerProvider
 object TracedPubSubCommands {
 
   /** Constructor for [[TracerProvider]]. */
-  def apply[F[_]: Functor, S[_[_], _], K, V](
+  def apply[F[_]: Functor, S[_], K, V](
       cmd: PubSubCommands[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
-  )(implicit tracerProvider: TracerProvider[F], SFunctor: Functor[S[F, *]]): F[TracedPubSubCommands[F, S, K, V]] = {
+  )(implicit tracerProvider: TracerProvider[F], SFunctor: Functor[S[*]]): F[TracedPubSubCommands[F, S, K, V]] = {
     tracerProvider
       .tracer("dev.profunktor.redis4cats.otel4s.TracedPubSubCommands")
       .withVersion(buildinfo.BuildInfo.version)
@@ -25,20 +25,20 @@ object TracedPubSubCommands {
   }
 
   /** Constructor for [[Tracer]]. */
-  def fromTracer[F[_]: Tracer, S[_[_], _], K, V](
+  def fromTracer[F[_]: Tracer, S[_], K, V](
       cmd: PubSubCommands[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
-  )(implicit SFunctor: Functor[S[F, *]]): TracedPubSubCommands[F, S, K, V] = {
+  )(implicit SFunctor: Functor[S[*]]): TracedPubSubCommands[F, S, K, V] = {
     val pub = new TracedPublishCommandsImplementation(config, cmd)
     val sub = new TracedSubscribeCommandsImplementation(config, cmd)
     new TracedPubSubCommandsImplementation(pub, sub)
   }
 }
-trait TracedPubSubCommands[F[_], S[_[_], _], K, V]
+trait TracedPubSubCommands[F[_], S[_], K, V]
     extends TracedPublishCommands[F, S, K, V]
     with TracedSubscribeCommands[F, S, K, V]
     with PubSubCommands[F, S, K, V]
-class TracedPubSubCommandsImplementation[F[_], S[_[_], _], K, V](
+class TracedPubSubCommandsImplementation[F[_], S[_], K, V](
     pub: TracedPublishCommands[F, S, K, V],
     sub: TracedSubscribeCommands[F, S, K, V]
 ) extends TracedPubSubCommands[F, S, K, V]

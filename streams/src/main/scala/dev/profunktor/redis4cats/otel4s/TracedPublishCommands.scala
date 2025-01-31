@@ -11,7 +11,7 @@ import org.typelevel.otel4s.trace.TracerProvider
 object TracedPublishCommands {
 
   /** Constructor for [[TracerProvider]]. */
-  def apply[F[_]: Functor, S[_[_], _], K, V](
+  def apply[F[_]: Functor, S[_], K, V](
       cmd: PublishCommands[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
   )(implicit tracerProvider: TracerProvider[F]): F[PublishCommands[F, S, K, V]] = {
@@ -25,15 +25,15 @@ object TracedPublishCommands {
   }
 
   /** Constructor for [[Tracer]]. */
-  def fromTracer[F[_]: Tracer, S[_[_], _], K, V](
+  def fromTracer[F[_]: Tracer, S[_], K, V](
       cmd: PublishCommands[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
   ): PublishCommands[F, S, K, V] = {
     new TracedPublishCommandsImplementation(config, cmd)
   }
 }
-trait TracedPublishCommands[F[_], S[_[_], _], K, V] extends PublishCommands[F, S, K, V]
-class TracedPublishCommandsImplementation[F[_]: Tracer, S[_[_], _], K, V](
+trait TracedPublishCommands[F[_], S[_], K, V] extends PublishCommands[F, S, K, V]
+class TracedPublishCommandsImplementation[F[_]: Tracer, S[_], K, V](
     config: TracedRedisConfig[F, K, V],
     cmd: PublishCommands[F, S, K, V]
 ) extends TracedPublishCommands[F, S, K, V]
@@ -67,7 +67,7 @@ class TracedPublishCommandsImplementation[F[_]: Tracer, S[_[_], _], K, V](
       cmd.shardNumSub(channels)
     )
 
-  override def publish(channel: RedisChannel[K]): S[F, V] => S[F, Unit] = cmd.publish(channel)
+  override def publish(channel: RedisChannel[K]): S[V] => S[Unit] = cmd.publish(channel)
 
   override def publish(channel: RedisChannel[K], value: V): F[Unit] =
     span(
