@@ -25,35 +25,43 @@ val Otel4sVersion = "0.11.2"
 
 lazy val root = tlCrossRootProject.aggregate(core, effects, streams)
 
-lazy val core = project.in(file("core"))
+val MUnit = Seq(
+  "org.scalameta" %% "munit" % "1.1.0" % Test,
+  "org.typelevel" %% "munit-cats-effect" % "2.0.0" % Test
+)
+
+lazy val core = project
+  .in(file("core"))
   .enablePlugins(BuildInfoPlugin)
   .settings(
     name := "otel4s-redis4cats-core",
     libraryDependencies ++= Seq(
       "dev.profunktor" %% "redis4cats-core" % Redis4CatsVersion,
-      "org.typelevel" %% "otel4s-core-trace" % Otel4sVersion,
-    ),
+      "org.typelevel" %% "otel4s-core-trace" % Otel4sVersion
+    ) ++ MUnit,
     buildInfoKeys := Seq[BuildInfoKey](version),
     buildInfoPackage := "dev.profunktor.redis4cats.otel4s.buildinfo"
   )
 
-lazy val effects = project.in(file("effects"))
+lazy val effects = project
+  .in(file("effects"))
   .dependsOn(core)
   .settings(
     name := "otel4s-redis4cats-effects",
     libraryDependencies ++= Seq(
       "dev.profunktor" %% "redis4cats-effects" % Redis4CatsVersion,
-      "org.typelevel" %% "otel4s-core-trace" % Otel4sVersion,
-    ),
+      "org.typelevel" %% "otel4s-core-trace" % Otel4sVersion
+    )
   )
 
-lazy val streams = project.in(file("streams"))
+lazy val streams = project
+  .in(file("streams"))
   .dependsOn(core)
   .settings(
     name := "otel4s-redis4cats-streams",
     libraryDependencies ++= Seq(
       "dev.profunktor" %% "redis4cats-streams" % Redis4CatsVersion,
-      "org.typelevel" %% "otel4s-core-trace" % Otel4sVersion,
+      "org.typelevel" %% "otel4s-core-trace" % Otel4sVersion
     )
   )
 

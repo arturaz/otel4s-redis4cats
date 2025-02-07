@@ -29,8 +29,8 @@ object TracedPubSubCommands {
       cmd: PubSubCommands[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
   )(implicit SFunctor: Functor[S[*]]): TracedPubSubCommands[F, S, K, V] = {
-    val pub = new TracedPublishCommandsImpl(config, cmd)
-    val sub = new TracedSubscribeCommandsImpl(config, cmd)
+    val pub = TracedPublishCommands.fromTracer(cmd, config)
+    val sub = TracedSubscribeCommands.fromTracer(cmd, config)
     new TracedPubSubCommandsImpl(pub, sub)
   }
 }
@@ -40,11 +40,25 @@ trait TracedPubSubCommands[F[_], S[_], K, V]
     extends TracedPublishCommands[F, S, K, V]
     with TracedSubscribeCommands[F, S, K, V]
     with PubSubCommands[F, S, K, V]
+    with TracedModifiers[F, K, V] {
 
-class TracedPubSubCommandsImpl[F[_], S[_], K, V](
+  override type Self <: TracedPubSubCommands[F, S, K, V]
+}
+
+// No stable ABI guaranteed
+private class TracedPubSubCommandsImpl[F[_], S[_], K, V](
     pub: TracedPublishCommands[F, S, K, V],
     sub: TracedSubscribeCommands[F, S, K, V]
 ) extends TracedPubSubCommands[F, S, K, V] {
+  override type Self = TracedPubSubCommands[F, S, K, V]
+
+  /** Modifies the current [[WrappingHelpers]]. */
+  override def withHelpers(f: WrappingHelpers[K, V] => WrappingHelpers[K, V]): TracedPubSubCommands[F, S, K, V] =
+    new TracedPubSubCommandsImpl(pub.withHelpers(f), sub.withHelpers(f))
+
+  /** Modifies the current [[CommandWrapper]]. */
+  override def withWrapper(f: CommandWrapper[F] => CommandWrapper[F]): TracedPubSubCommands[F, S, K, V] =
+    new TracedPubSubCommandsImpl(pub.withWrapper(f), sub.withWrapper(f))
 
   override def numPat: F[Long] = pub.numPat
 
@@ -81,5 +95,4 @@ class TracedPubSubCommandsImpl[F[_], S[_], K, V](
       channel: RedisPattern[K],
       eventName: RedisPatternEvent[K, V] => String
   ) = sub.psubscribeWithTracedEvents(channel, eventName)
-
 }

@@ -4,7 +4,6 @@ import cats.Functor
 import cats.syntax.all.*
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisPattern, RedisPatternEvent}
 import dev.profunktor.redis4cats.pubsub.SubscribeCommands
-import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanOps, Tracer, TracerProvider}
 
 object TracedSubscribeCommands {
@@ -28,12 +27,14 @@ object TracedSubscribeCommands {
       cmd: SubscribeCommands[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
   )(implicit SFunctor: Functor[S[*]]): TracedSubscribeCommands[F, S, K, V] = {
-    new TracedSubscribeCommandsImpl(config, cmd)
+    new TracedSubscribeCommandsImpl(config, cmd, config.asWrappingHelpers, config.asCommandWrapper)
   }
 }
 
 /** Provides extra operations regarding tracing. */
-trait TracedSubscribeCommands[F[_], S[_], K, V] extends SubscribeCommands[F, S, K, V] {
+trait TracedSubscribeCommands[F[_], S[_], K, V] extends SubscribeCommands[F, S, K, V] with TracedModifiers[F, K, V] {
+
+  override type Self <: TracedSubscribeCommands[F, S, K, V]
 
   /** As [[subscribe]] but returns `SpanOps` for each event that introduces a span when it is used.
     *
@@ -54,19 +55,27 @@ trait TracedSubscribeCommands[F[_], S[_], K, V] extends SubscribeCommands[F, S, 
   ): S[(SpanOps[F], RedisPatternEvent[K, V])]
 }
 
-class TracedSubscribeCommandsImpl[F[_]: Tracer, S[_], K, V](
+// No stable ABI guaranteed
+private class TracedSubscribeCommandsImpl[F[_]: Tracer, S[_], K, V](
     config: TracedRedisConfig[F, K, V],
-    val cmd: SubscribeCommands[F, S, K, V]
+    val cmd: SubscribeCommands[F, S, K, V],
+    val helpers: WrappingHelpers[K, V],
+    val wrapper: CommandWrapper[F]
 )(implicit SFunctor: Functor[S[*]])
     extends WrappedSubscribeCommands[F, S, K, V]
     with TracedSubscribeCommands[F, S, K, V] {
+  override type Self = TracedSubscribeCommands[F, S, K, V]
+
   private def Attributes = StreamsAttributes
+  import helpers.*
 
-  override def recordKey = config.recordKey
-  override def recordValue = config.recordValue
+  /** Modifies the current [[WrappingHelpers]]. */
+  override def withHelpers(f: WrappingHelpers[K, V] => WrappingHelpers[K, V]): TracedSubscribeCommands[F, S, K, V] =
+    new TracedSubscribeCommandsImpl(config, cmd, f(helpers), wrapper)
 
-  override def wrap[A](name: String, attributes: collection.immutable.Iterable[Attribute[?]])(fa: F[A]): F[A] =
-    config.span(name, attributes)(fa)
+  /** Modifies the current [[CommandWrapper]]. */
+  override def withWrapper(f: CommandWrapper[F] => CommandWrapper[F]): TracedSubscribeCommands[F, S, K, V] =
+    new TracedSubscribeCommandsImpl(config, cmd, helpers, f(wrapper))
 
   override def subscribeWithTracedEvents(
       channel: RedisChannel[K],

@@ -2,16 +2,10 @@ package dev.profunktor.redis4cats.otel4s
 
 import cats.Functor
 import cats.syntax.all.*
-import dev.profunktor.redis4cats.streams.Streaming
-import dev.profunktor.redis4cats.streams.data
-import org.typelevel.otel4s.Attribute
-import org.typelevel.otel4s.trace.SpanOps
-import org.typelevel.otel4s.trace.Tracer
-import org.typelevel.otel4s.trace.TracerProvider
+import dev.profunktor.redis4cats.streams.{Streaming, data}
+import org.typelevel.otel4s.trace.{SpanOps, Tracer, TracerProvider}
 
-import scala.collection.immutable
-import scala.concurrent.duration.Duration
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.{Duration, FiniteDuration}
 
 object TracedStreaming {
 
@@ -34,10 +28,11 @@ object TracedStreaming {
       cmd: Streaming[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
   )(implicit SFunctor: Functor[S[*]]): TracedStreaming[F, S, K, V] = {
-    new TracedStreamingImplementation(config, cmd)
+    new TracedStreamingImpl(config, cmd, config.asWrappingHelpers, config.asCommandWrapper)
   }
 }
-trait TracedStreaming[F[_], S[_], K, V] extends Streaming[F, S, K, V] {
+trait TracedStreaming[F[_], S[_], K, V] extends Streaming[F, S, K, V] with TracedModifiers[F, K, V] {
+  override type Self <: TracedStreaming[F, S, K, V]
 
   /** As [[read]] but returns `SpanOps` for each message that introduces a span when it is used.
     *
@@ -54,20 +49,27 @@ trait TracedStreaming[F[_], S[_], K, V] extends Streaming[F, S, K, V] {
   ): S[(SpanOps[F], data.XReadMessage[K, V])]
 }
 
-class TracedStreamingImplementation[F[_]: Tracer, S[_], K, V](
+// No stable ABI guaranteed
+private class TracedStreamingImpl[F[_]: Tracer, S[_], K, V](
     config: TracedRedisConfig[F, K, V],
-    val cmd: Streaming[F, S, K, V]
+    val cmd: Streaming[F, S, K, V],
+    val helpers: WrappingHelpers[K, V],
+    val wrapper: CommandWrapper[F]
 )(implicit SFunctor: Functor[S[*]])
     extends WrappedStreaming[F, S, K, V]
     with TracedStreaming[F, S, K, V] {
-  import config.*
+  override type Self = TracedStreaming[F, S, K, V]
+
+  import helpers.*
   private def Attributes = StreamsAttributes
 
-  override def recordKey = config.recordKey
-  override def recordValue = config.recordValue
+  /** Modifies the current [[WrappingHelpers]]. */
+  override def withHelpers(f: WrappingHelpers[K, V] => WrappingHelpers[K, V]): TracedStreaming[F, S, K, V] =
+    new TracedStreamingImpl(config, cmd, f(helpers), wrapper)
 
-  override def wrap[A](name: String, attributes: immutable.Iterable[Attribute[?]])(fa: F[A]): F[A] =
-    config.span(name, attributes)(fa)
+  /** Modifies the current [[CommandWrapper]]. */
+  override def withWrapper(f: CommandWrapper[F] => CommandWrapper[F]): TracedStreaming[F, S, K, V] =
+    new TracedStreamingImpl(config, cmd, helpers, f(wrapper))
 
   override def readWithTracedMessages(
       keys: Set[K],
@@ -81,7 +83,7 @@ class TracedStreamingImplementation[F[_]: Tracer, S[_], K, V](
     read(keys, chunkSize, initialOffset, block, count, restartOnTimeout).map { msg =>
       val data.XReadMessage(messageId, key, body) = msg
 
-      val ops = spanOps(
+      val ops = config.spanOps(
         spanName(msg),
         Attributes.MessageId(messageId.value) :: keyAsAttribute(key).toList :::
           kvsAsAttribute(body, Attributes.Body).toList

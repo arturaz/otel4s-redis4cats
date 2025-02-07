@@ -5,6 +5,8 @@ import org.typelevel.otel4s.trace.SpanBuilder
 import org.typelevel.otel4s.trace.SpanOps
 import org.typelevel.otel4s.trace.Tracer
 
+import scala.collection.immutable
+
 /** @param spanName
   *   A function that converts a command name to a span name.
   * @param configureSpanBuilder
@@ -20,7 +22,7 @@ case class TracedRedisConfig[F[_], K, V](
     configureSpanBuilder: (SpanBuilder[F], String) => SpanBuilder[F],
     recordKey: Option[K => String],
     recordValue: Option[V => String]
-) {
+) { self =>
 
   /** Returns a span builder.
     *
@@ -57,4 +59,14 @@ case class TracedRedisConfig[F[_], K, V](
       tracer: Tracer[F]
   ): F[A] =
     spanOps(name, attributes).surround(fa)
+
+  def asCommandWrapper(implicit tracer: Tracer[F]): CommandWrapper[F] = new CommandWrapper[F] {
+    override def wrap[A](name: String, attributes: immutable.Iterable[Attribute[?]])(fa: F[A]): F[A] =
+      span(name, attributes)(fa)
+  }
+
+  def asWrappingHelpers: WrappingHelpers[K, V] = new WrappingHelpers[K, V] {
+    override def recordKey = self.recordKey
+    override def recordValue = self.recordValue
+  }
 }

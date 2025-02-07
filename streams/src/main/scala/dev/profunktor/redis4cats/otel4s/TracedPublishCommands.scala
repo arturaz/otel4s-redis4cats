@@ -3,7 +3,6 @@ package dev.profunktor.redis4cats.otel4s
 import cats.Functor
 import cats.syntax.all.*
 import dev.profunktor.redis4cats.pubsub.PublishCommands
-import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{Tracer, TracerProvider}
 
 object TracedPublishCommands {
@@ -27,7 +26,7 @@ object TracedPublishCommands {
       cmd: PublishCommands[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
   ): TracedPublishCommands[F, S, K, V] = {
-    new TracedPublishCommandsImpl(config, cmd)
+    new TracedPublishCommandsImpl(cmd, config.asWrappingHelpers, config.asCommandWrapper)
   }
 }
 
@@ -35,16 +34,25 @@ object TracedPublishCommands {
   *   This trait currently does not export any additional operations, but exists to be consistent with
   *   [[TracedSubscribeCommands]].
   */
-trait TracedPublishCommands[F[_], S[_], K, V] extends PublishCommands[F, S, K, V]
+trait TracedPublishCommands[F[_], S[_], K, V] extends PublishCommands[F, S, K, V] with TracedModifiers[F, K, V] {
 
-class TracedPublishCommandsImpl[F[_]: Tracer, S[_], K, V](
-    config: TracedRedisConfig[F, K, V],
-    val cmd: PublishCommands[F, S, K, V]
+  override type Self <: TracedPublishCommands[F, S, K, V]
+}
+
+// No stable ABI guaranteed
+private class TracedPublishCommandsImpl[F[_]: Tracer, S[_], K, V](
+    val cmd: PublishCommands[F, S, K, V],
+    val helpers: WrappingHelpers[K, V],
+    val wrapper: CommandWrapper[F]
 ) extends WrappedPublishCommands[F, S, K, V]
     with TracedPublishCommands[F, S, K, V] {
-  override def recordKey = config.recordKey
-  override def recordValue = config.recordValue
+  override type Self = TracedPublishCommands[F, S, K, V]
 
-  override def wrap[A](name: String, attributes: collection.immutable.Iterable[Attribute[?]])(fa: F[A]): F[A] =
-    config.span(name, attributes)(fa)
+  /** Modifies the current [[WrappingHelpers]]. */
+  override def withHelpers(f: WrappingHelpers[K, V] => WrappingHelpers[K, V]): TracedPublishCommands[F, S, K, V] =
+    new TracedPublishCommandsImpl(cmd, f(helpers), wrapper)
+
+  /** Modifies the current [[CommandWrapper]]. */
+  override def withWrapper(f: CommandWrapper[F] => CommandWrapper[F]): TracedPublishCommands[F, S, K, V] =
+    new TracedPublishCommandsImpl(cmd, helpers, f(wrapper))
 }
