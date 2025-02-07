@@ -11,16 +11,16 @@ ThisBuild / developers := List(
 )
 
 // publish to s01.oss.sonatype.org (set to true to publish to oss.sonatype.org instead)
-ThisBuild / tlSonatypeUseLegacyHost := false
+ThisBuild / sonatypeCredentialHost := xerial.sbt.Sonatype.sonatypeLegacy
 
 // publish website from this branch
 ThisBuild / tlSitePublishBranch := Some("main")
 
 val Scala213 = "2.13.16"
-ThisBuild / crossScalaVersions := Seq(Scala213, "3.3.4")
+ThisBuild / crossScalaVersions := Seq(Scala213, "3.3.5")
 ThisBuild / scalaVersion := Scala213 // the default Scala
 
-val Redis4CatsVersion = "1.7.0-5-fe10c14-SNAPSHOT"
+val Redis4CatsVersion = "1.7.0-20-77770cc-SNAPSHOT"
 val Otel4sVersion = "0.11.2"
 
 lazy val root = tlCrossRootProject.aggregate(core, effects, streams)

@@ -29,20 +29,22 @@ object TracedPubSubCommands {
       cmd: PubSubCommands[F, S, K, V],
       config: TracedRedisConfig[F, K, V]
   )(implicit SFunctor: Functor[S[*]]): TracedPubSubCommands[F, S, K, V] = {
-    val pub = new TracedPublishCommandsImplementation(config, cmd)
-    val sub = new TracedSubscribeCommandsImplementation(config, cmd)
-    new TracedPubSubCommandsImplementation(pub, sub)
+    val pub = new TracedPublishCommandsImpl(config, cmd)
+    val sub = new TracedSubscribeCommandsImpl(config, cmd)
+    new TracedPubSubCommandsImpl(pub, sub)
   }
 }
+
+/** Provides extra operations regarding tracing. */
 trait TracedPubSubCommands[F[_], S[_], K, V]
     extends TracedPublishCommands[F, S, K, V]
     with TracedSubscribeCommands[F, S, K, V]
     with PubSubCommands[F, S, K, V]
-class TracedPubSubCommandsImplementation[F[_], S[_], K, V](
+
+class TracedPubSubCommandsImpl[F[_], S[_], K, V](
     pub: TracedPublishCommands[F, S, K, V],
     sub: TracedSubscribeCommands[F, S, K, V]
-) extends TracedPubSubCommands[F, S, K, V]
-    with TracedSubscribeCommands[F, S, K, V] {
+) extends TracedPubSubCommands[F, S, K, V] {
 
   override def numPat: F[Long] = pub.numPat
 

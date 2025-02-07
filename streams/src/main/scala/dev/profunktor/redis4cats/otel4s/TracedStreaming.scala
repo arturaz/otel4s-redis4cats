@@ -4,10 +4,12 @@ import cats.Functor
 import cats.syntax.all.*
 import dev.profunktor.redis4cats.streams.Streaming
 import dev.profunktor.redis4cats.streams.data
+import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.SpanOps
 import org.typelevel.otel4s.trace.Tracer
 import org.typelevel.otel4s.trace.TracerProvider
 
+import scala.collection.immutable
 import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration
 
@@ -52,38 +54,20 @@ trait TracedStreaming[F[_], S[_], K, V] extends Streaming[F, S, K, V] {
   ): S[(SpanOps[F], data.XReadMessage[K, V])]
 }
 
-private class TracedStreamingImplementation[F[_]: Tracer, S[_], K, V](
+class TracedStreamingImplementation[F[_]: Tracer, S[_], K, V](
     config: TracedRedisConfig[F, K, V],
-    cmd: Streaming[F, S, K, V]
+    val cmd: Streaming[F, S, K, V]
 )(implicit SFunctor: Functor[S[*]])
-    extends TracedStreaming[F, S, K, V]
-    with CoreHelpers[K, V] {
+    extends WrappedStreaming[F, S, K, V]
+    with TracedStreaming[F, S, K, V] {
   import config.*
   private def Attributes = StreamsAttributes
 
   override def recordKey = config.recordKey
   override def recordValue = config.recordValue
 
-  override def append: S[data.XAddMessage[K, V]] => S[data.MessageId] = cmd.append
-
-  override def append(message: data.XAddMessage[K, V]): F[data.MessageId] = {
-    val data.XAddMessage(key, body, approxMaxlen, minId) = message
-
-    span(
-      "append",
-      keyAsAttribute(key).toList ::: kvsAsAttribute(body, Attributes.Body).toList :::
-        approxMaxlen.map(Attributes.ApproxMaxlen(_)).toList ::: minId.map(Attributes.MinId(_)).toList
-    )(cmd.append(message))
-  }
-
-  override def read(
-      keys: Set[K],
-      chunkSize: Int,
-      initialOffset: K => data.StreamingOffset[K],
-      block: Option[Duration],
-      count: Option[Long],
-      restartOnTimeout: Option[FiniteDuration => Boolean]
-  ) = cmd.read(keys, chunkSize, initialOffset, block, count, restartOnTimeout)
+  override def wrap[A](name: String, attributes: immutable.Iterable[Attribute[?]])(fa: F[A]): F[A] =
+    config.span(name, attributes)(fa)
 
   override def readWithTracedMessages(
       keys: Set[K],
