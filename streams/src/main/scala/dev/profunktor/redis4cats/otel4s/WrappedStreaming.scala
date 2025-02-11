@@ -1,8 +1,9 @@
 package dev.profunktor.redis4cats.otel4s
 
+import dev.profunktor.redis4cats.RestartOnTimeout
 import dev.profunktor.redis4cats.streams.{Streaming, data}
 
-import scala.concurrent.duration.{Duration, FiniteDuration}
+import scala.concurrent.duration.Duration
 
 /** Wraps every command in [[Streaming]]. This is used for tracing, but can be used for something else as well.
   */
@@ -38,6 +39,6 @@ trait WrappedStreaming[F[_], S[_], K, V] extends Streaming[F, S, K, V] {
       initialOffset: K => data.StreamingOffset[K],
       block: Option[Duration],
       count: Option[Long],
-      restartOnTimeout: Option[FiniteDuration => Boolean]
+      restartOnTimeout: RestartOnTimeout
   ) = cmd.read(keys, chunkSize, initialOffset, block, count, restartOnTimeout)
 }

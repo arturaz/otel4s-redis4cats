@@ -2,6 +2,7 @@ package dev.profunktor.redis4cats.otel4s
 
 import cats.Functor
 import cats.syntax.all.*
+import dev.profunktor.redis4cats.RestartOnTimeout
 import dev.profunktor.redis4cats.streams.{Streaming, data}
 import org.typelevel.otel4s.trace.{SpanOps, Tracer, TracerProvider}
 
@@ -44,7 +45,7 @@ trait TracedStreaming[F[_], S[_], K, V] extends Streaming[F, S, K, V] with Trace
       initialOffset: K => data.StreamingOffset[K],
       block: Option[Duration],
       count: Option[Long],
-      restartOnTimeout: Option[FiniteDuration => Boolean],
+      restartOnTimeout: RestartOnTimeout = RestartOnTimeout.always,
       spanName: data.XReadMessage[K, V] => String = _ => "message"
   ): S[(SpanOps[F], data.XReadMessage[K, V])]
 }
@@ -77,7 +78,7 @@ private class TracedStreamingImpl[F[_]: Tracer, S[_], K, V](
       initialOffset: K => data.StreamingOffset[K],
       block: Option[Duration],
       count: Option[Long],
-      restartOnTimeout: Option[FiniteDuration => Boolean],
+      restartOnTimeout: RestartOnTimeout,
       spanName: data.XReadMessage[K, V] => String
   ): S[(SpanOps[F], data.XReadMessage[K, V])] =
     read(keys, chunkSize, initialOffset, block, count, restartOnTimeout).map { msg =>

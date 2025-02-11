@@ -48,10 +48,10 @@ trait WrappedPublishCommands[F[_], S[_], K, V] extends PublishCommands[F, S, K, 
       cmd.shardNumSub(channels)
     )
 
-  override def publish(channel: RedisChannel[K]): S[V] => S[Unit] =
+  override def publish(channel: RedisChannel[K]): S[V] => S[Long] =
     cmd.publish(channel)
 
-  override def publish(channel: RedisChannel[K], value: V): F[Unit] =
+  override def publish(channel: RedisChannel[K], value: V): F[Long] =
     wrapper.wrap(
       "publish",
       keyAsAttribute(channel.underlying, Attributes.Channel).toList :::
