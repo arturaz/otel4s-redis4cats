@@ -31,4 +31,10 @@ trait WrappedSubscribeCommands[F[_], S[_], K, V] extends SubscribeCommands[F, S,
     wrapper.wrap("punsubscribe", keyAsAttribute(channel.underlying, Attributes.Channel).toList)(
       cmd.punsubscribe(channel)
     )
+
+  override def internalChannelSubscriptions: F[Map[RedisChannel[K], Long]] =
+    wrapper.wrap("internalChannelSubscriptions")(cmd.internalChannelSubscriptions)
+
+  override def internalPatternSubscriptions: F[Map[RedisPattern[K], Long]] =
+    wrapper.wrap("internalPatternSubscriptions")(cmd.internalPatternSubscriptions)
 }

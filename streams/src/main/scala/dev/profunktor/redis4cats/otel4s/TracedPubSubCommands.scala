@@ -95,4 +95,8 @@ private class TracedPubSubCommandsImpl[F[_], S[_], K, V](
       channel: RedisPattern[K],
       eventName: RedisPatternEvent[K, V] => String
   ) = sub.psubscribeWithTracedEvents(channel, eventName)
+
+  override def internalChannelSubscriptions = sub.internalChannelSubscriptions
+
+  override def internalPatternSubscriptions = sub.internalPatternSubscriptions
 }

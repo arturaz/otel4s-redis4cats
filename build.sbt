@@ -20,7 +20,7 @@ val Scala213 = "2.13.16"
 ThisBuild / crossScalaVersions := Seq(Scala213, "3.3.5")
 ThisBuild / scalaVersion := Scala213 // the default Scala
 
-val Redis4CatsVersion = "1.8.0-18-efaf537-SNAPSHOT"
+val Redis4CatsVersion = "1.8.0-21-2b73cea-SNAPSHOT"
 val Otel4sVersion = "0.11.2"
 
 lazy val root = tlCrossRootProject.aggregate(core, effects, streams)

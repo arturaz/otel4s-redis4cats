@@ -6,7 +6,7 @@ import dev.profunktor.redis4cats.RestartOnTimeout
 import dev.profunktor.redis4cats.streams.{Streaming, data}
 import org.typelevel.otel4s.trace.{SpanOps, Tracer, TracerProvider}
 
-import scala.concurrent.duration.{Duration, FiniteDuration}
+import scala.concurrent.duration.Duration
 
 object TracedStreaming {
 
