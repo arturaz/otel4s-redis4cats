@@ -5,6 +5,7 @@ import dev.profunktor.redis4cats.algebra.BitCommandOperation
 import dev.profunktor.redis4cats.effects
 import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.AttributeKey
+import scala.concurrent.duration.Duration
 
 trait EffectsAttributes extends CoreAttributes {
   import EffectsImplicits.*
@@ -106,5 +107,16 @@ trait EffectsAttributes extends CoreAttributes {
       absTtl.map(RestoreArgsAbsTtl(_)).toList :::
       idleTime.map(RestoreArgsIdleTime(_)).toList
   }
+
+  // Stream-specific attributes (used by RedisCommands stream APIs)
+  val StreamBody: AttributeKey[Seq[String]] = AttributeKey.stringSeq("db.redis.body")
+  val ApproxMaxlen: AttributeKey[Long] = AttributeKey.long("db.redis.approxMaxlen")
+  val MinId: AttributeKey[String] = AttributeKey.string("db.redis.minId")
+  val TrimPrecision: AttributeKey[String] = AttributeKey.string("db.redis.trim.precision")
+  val NoMkStream: AttributeKey[Boolean] = AttributeKey.boolean("db.redis.nomkstream")
+  val InitialOffsets: AttributeKey[Seq[String]] = AttributeKey.stringSeq("db.redis.initialOffsets")
+  val MessageId: AttributeKey[String] = AttributeKey.string("db.redis.messageId")
+  val Block: AttributeKey[Long] = AttributeKey.long("db.redis.block")
+  def block(duration: Duration): Attribute[Long] = Block(durationAsLong(duration))
 }
 object EffectsAttributes extends EffectsAttributes

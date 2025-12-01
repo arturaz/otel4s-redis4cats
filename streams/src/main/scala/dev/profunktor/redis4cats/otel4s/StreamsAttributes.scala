@@ -9,6 +9,8 @@ trait StreamsAttributes extends CoreAttributes {
   val ApproxMaxlen: AttributeKey[Long] = AttributeKey.long("db.redis.approxMaxlen")
   val MinId: AttributeKey[String] = AttributeKey.string("db.redis.minId")
   val ChunkSize: AttributeKey[Long] = AttributeKey.long("db.redis.chunkSize")
+  val TrimPrecision: AttributeKey[String] = AttributeKey.string("db.redis.trim.precision")
+  val NoMkStream: AttributeKey[Boolean] = AttributeKey.boolean("db.redis.nomkstream")
 
   /** Blocking time in milliseconds. */
   val Block: AttributeKey[Long] = AttributeKey.long("db.redis.block")

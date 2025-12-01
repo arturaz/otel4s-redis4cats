@@ -3,7 +3,8 @@ package dev.profunktor.redis4cats.otel4s
 import cats.Functor
 import cats.syntax.all.*
 import dev.profunktor.redis4cats.RestartOnTimeout
-import dev.profunktor.redis4cats.streams.{Streaming, data}
+import dev.profunktor.redis4cats.effects.{StreamMessage, XReadOffsets}
+import dev.profunktor.redis4cats.streams.Streaming
 import org.typelevel.otel4s.trace.{SpanOps, Tracer, TracerProvider}
 
 import scala.concurrent.duration.Duration
@@ -40,14 +41,12 @@ trait TracedStreaming[F[_], S[_], K, V] extends Streaming[F, S, K, V] with Trace
     * You must use the `SpanOps` yourself to record the span.
     */
   def readWithTracedMessages(
-      keys: Set[K],
-      chunkSize: Int,
-      initialOffset: K => data.StreamingOffset[K],
+      streams: Set[XReadOffsets[K]],
       block: Option[Duration],
       count: Option[Long],
       restartOnTimeout: RestartOnTimeout = RestartOnTimeout.always,
-      spanName: data.XReadMessage[K, V] => String = _ => "message"
-  ): S[(SpanOps[F], data.XReadMessage[K, V])]
+      spanName: StreamMessage[K, V] => String = _ => "message"
+  ): S[(SpanOps[F], StreamMessage[K, V])]
 }
 
 // No stable ABI guaranteed
@@ -73,16 +72,14 @@ private class TracedStreamingImpl[F[_]: Tracer, S[_], K, V](
     new TracedStreamingImpl(config, cmd, helpers, f(wrapper))
 
   override def readWithTracedMessages(
-      keys: Set[K],
-      chunkSize: Int,
-      initialOffset: K => data.StreamingOffset[K],
+      streams: Set[XReadOffsets[K]],
       block: Option[Duration],
       count: Option[Long],
       restartOnTimeout: RestartOnTimeout,
-      spanName: data.XReadMessage[K, V] => String
-  ): S[(SpanOps[F], data.XReadMessage[K, V])] =
-    read(keys, chunkSize, initialOffset, block, count, restartOnTimeout).map { msg =>
-      val data.XReadMessage(messageId, key, body) = msg
+      spanName: StreamMessage[K, V] => String
+  ): S[(SpanOps[F], StreamMessage[K, V])] =
+    read(streams, block, count, restartOnTimeout).map { msg =>
+      val StreamMessage(messageId, key, body) = msg
 
       val ops = config.spanOps(
         spanName(msg),

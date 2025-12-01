@@ -6,6 +6,9 @@ import cats.syntax.show.*
 import dev.profunktor.redis4cats.algebra.BitCommandOperation
 import dev.profunktor.redis4cats.tx.TxStore
 import dev.profunktor.redis4cats.{RedisCommands, data, effects}
+import org.typelevel.otel4s.Attribute
+import dev.profunktor.redis4cats.otel4s.StreamArgAttributes.*
+import dev.profunktor.redis4cats.otel4s.StreamAttributeKeys
 import io.lettuce.core.*
 import io.lettuce.core.cluster.api.async.RedisClusterAsyncCommands
 
@@ -168,6 +171,140 @@ trait WrappedRedisCommands[F[_], K, V] extends RedisCommands[F, K, V] {
     wrapper.wrap("hExists", keyAsAttribute(field, Attributes.Field).toList ::: keyAsAttribute(key).toList)(
       cmd.hExists(key, field)
     )
+
+  override def hGetEx(key: K, getExArg: effects.HGetExArgs, field: K, fields: K*): F[List[Option[V]]] =
+    wrapper.wrap(
+      "hGetEx",
+      Attributes.GetExArg(getExArg.toString) :: keysAsAttribute(field, fields, Attributes.Fields).toList :::
+        keyAsAttribute(key).toList
+    )(cmd.hGetEx(key, getExArg, field, fields*))
+
+  override def hGetDel(key: K, field: K, fields: K*): F[List[Option[V]]] =
+    wrapper.wrap("hGetDel", keysAsAttribute(field, fields, Attributes.Fields).toList ::: keyAsAttribute(key).toList)(
+      cmd.hGetDel(key, field, fields*)
+    )
+
+  override def hScan(key: K): F[data.MapScanCursor[K, V]] =
+    wrapper.wrap("hScan", keyAsAttribute(key).toList)(cmd.hScan(key))
+
+  override def hScan(key: K, cursor: data.MapScanCursor[K, V]): F[data.MapScanCursor[K, V]] =
+    wrapper.wrap(
+      "hScan",
+      keyAsAttribute(key).toList ::: Attributes.CursorAsKeyScanCursor(Seq(cursor.cursor)) :: Nil
+    )(cmd.hScan(key, cursor))
+
+  override def hScan(key: K, scanArgs: effects.ScanArgs): F[data.MapScanCursor[K, V]] =
+    wrapper.wrap("hScan", Attributes.ScanArgs(scanArgs.show) :: keyAsAttribute(key).toList)(cmd.hScan(key, scanArgs))
+
+  override def hScan(
+      key: K,
+      cursor: data.MapScanCursor[K, V],
+      scanArgs: effects.ScanArgs
+  ): F[data.MapScanCursor[K, V]] =
+    wrapper.wrap(
+      "hScan",
+      Attributes.ScanArgs(scanArgs.show) :: Attributes.CursorAsKeyScanCursor(Seq(cursor.cursor)) :: keyAsAttribute(
+        key
+      ).toList
+    )(cmd.hScan(key, cursor, scanArgs))
+
+  override def hScanNoValues(key: K): F[data.KeyScanCursor[K]] =
+    wrapper.wrap("hScanNoValues", keyAsAttribute(key).toList)(cmd.hScanNoValues(key))
+
+  override def hScanNoValues(key: K, cursor: data.KeyScanCursor[K]): F[data.KeyScanCursor[K]] =
+    wrapper.wrap(
+      "hScanNoValues",
+      keyAsAttribute(key).toList ::: mapAsAttribute(cursor, recordKey, Attributes.CursorAsKeyScanCursor).toList
+    )(cmd.hScanNoValues(key, cursor))
+
+  override def hScanNoValues(key: K, scanArgs: effects.ScanArgs): F[data.KeyScanCursor[K]] =
+    wrapper.wrap(
+      "hScanNoValues",
+      Attributes.ScanArgs(scanArgs.show) :: keyAsAttribute(key).toList
+    )(cmd.hScanNoValues(key, scanArgs))
+
+  override def hScanNoValues(
+      key: K,
+      cursor: data.KeyScanCursor[K],
+      scanArgs: effects.ScanArgs
+  ): F[data.KeyScanCursor[K]] =
+    wrapper.wrap(
+      "hScanNoValues",
+      Attributes.ScanArgs(scanArgs.show) :: mapAsAttribute(cursor, recordKey, Attributes.CursorAsKeyScanCursor).toList :::
+        keyAsAttribute(key).toList
+    )(cmd.hScanNoValues(key, cursor, scanArgs))
+
+  override def hExpire(key: K, expiresIn: FiniteDuration, fields: K*): F[List[Long]] =
+    wrapper.wrap(
+      "hExpire",
+      Attributes.expiresIn(expiresIn) :: keys2AsAttribute(fields, Attributes.Fields).toList ::: keyAsAttribute(
+        key
+      ).toList
+    )(cmd.hExpire(key, expiresIn, fields*))
+
+  override def hExpire(
+      key: K,
+      expiresIn: FiniteDuration,
+      args: effects.ExpireExistenceArg,
+      fields: K*
+  ): F[List[Long]] =
+    wrapper.wrap(
+      "hExpire",
+      Attributes.expireExistenceArg(args) :: Attributes.expiresIn(expiresIn) :: keys2AsAttribute(
+        fields,
+        Attributes.Fields
+      ).toList ::: keyAsAttribute(key).toList
+    )(cmd.hExpire(key, expiresIn, args, fields*))
+
+  override def hExpireAt(key: K, expireAt: Instant, fields: K*): F[List[Long]] =
+    wrapper.wrap(
+      "hExpireAt",
+      Attributes.at(expireAt) :: keys2AsAttribute(fields, Attributes.Fields).toList ::: keyAsAttribute(key).toList
+    )(cmd.hExpireAt(key, expireAt, fields*))
+
+  override def hExpireAt(
+      key: K,
+      expireAt: Instant,
+      args: effects.ExpireExistenceArg,
+      fields: K*
+  ): F[List[Long]] =
+    wrapper.wrap(
+      "hExpireAt",
+      Attributes.expireExistenceArg(args) :: Attributes.at(expireAt) :: keys2AsAttribute(
+        fields,
+        Attributes.Fields
+      ).toList ::: keyAsAttribute(key).toList
+    )(cmd.hExpireAt(key, expireAt, args, fields*))
+
+  override def hExpireTime(key: K, fields: K*): F[List[Option[Instant]]] =
+    wrapper.wrap(
+      "hExpireTime",
+      keys2AsAttribute(fields, Attributes.Fields).toList ::: keyAsAttribute(key).toList
+    )(cmd.hExpireTime(key, fields*))
+
+  override def hpExpireTime(key: K, fields: K*): F[List[Option[Instant]]] =
+    wrapper.wrap(
+      "hpExpireTime",
+      keys2AsAttribute(fields, Attributes.Fields).toList ::: keyAsAttribute(key).toList
+    )(cmd.hpExpireTime(key, fields*))
+
+  override def httl(key: K, fields: K*): F[List[Option[FiniteDuration]]] =
+    wrapper.wrap(
+      "httl",
+      keys2AsAttribute(fields, Attributes.Fields).toList ::: keyAsAttribute(key).toList
+    )(cmd.httl(key, fields*))
+
+  override def hpttl(key: K, fields: K*): F[List[Option[FiniteDuration]]] =
+    wrapper.wrap(
+      "hpttl",
+      keys2AsAttribute(fields, Attributes.Fields).toList ::: keyAsAttribute(key).toList
+    )(cmd.hpttl(key, fields*))
+
+  override def hPersist(key: K, fields: K*): F[List[Boolean]] =
+    wrapper.wrap(
+      "hPersist",
+      keys2AsAttribute(fields, Attributes.Fields).toList ::: keyAsAttribute(key).toList
+    )(cmd.hPersist(key, fields*))
 
   override def sCard(key: K): F[Long] =
     wrapper.wrap("sCard", keyAsAttribute(key).toList)(cmd.sCard(key))
@@ -340,6 +477,11 @@ trait WrappedRedisCommands[F[_], K, V] extends RedisCommands[F, K, V] {
   override def zScore(key: K, value: V): F[Option[Double]] =
     wrapper.wrap("zScore", kvAsAttributes(key, value).toList)(cmd.zScore(key, value))
 
+  override def zMScore(key: K, values: V*): F[List[Option[Double]]] =
+    wrapper.wrap("zMScore", values2AsAttribute(values).toList ::: keyAsAttribute(key).toList)(
+      cmd.zMScore(key, values*)
+    )
+
   override def zPopMin(key: K, count: Long): F[List[effects.ScoreWithValue[V]]] =
     wrapper.wrap("zPopMin", Attributes.Count(count) :: keyAsAttribute(key).toList)(cmd.zPopMin(key, count))
 
@@ -443,6 +585,60 @@ trait WrappedRedisCommands[F[_], K, V] extends RedisCommands[F, K, V] {
         .map(Attributes.zStoreArgs)
         .toList ::: keys2AsAttribute(keys).toList
     )(cmd.zUnionStore(destination, args, keys*))
+
+  override def xAdd(key: K, body: Map[K, V], args: effects.XAddArgs = effects.XAddArgs()): F[effects.MessageId] =
+    wrapper.wrap(
+      "xAdd",
+      keyAsAttribute(key).toList ::: kvsAsAttribute(body, StreamAttributeKeys.Body).toList ::: xAddArgsAttributes(args)
+    )(cmd.xAdd(key, body, args))
+
+  override def xTrim(key: K, args: effects.XTrimArgs): F[Long] =
+    wrapper.wrap("xTrim", keyAsAttribute(key).toList ::: trimArgsAttributes(Some(args)))(cmd.xTrim(key, args))
+
+  override def xDel(key: K, ids: String*): F[Long] =
+    wrapper.wrap(
+      "xDel",
+      keyAsAttribute(key).toList ::: ids.headOption.map(_ => Attributes.Count(ids.size.toLong)).toList
+    )(cmd.xDel(key, ids*))
+
+  override def xRead(
+      streams: Set[effects.XReadOffsets[K]],
+      block: Option[Duration],
+      count: Option[Long]
+  ): F[List[effects.StreamMessage[K, V]]] =
+    wrapper.wrap(
+      "xRead",
+      offsetAttributes(recordKey, streams) ::: block.map(StreamAttributeKeys.block).toList ::: count
+        .map(Attributes.Count(_))
+        .toList
+    )(cmd.xRead(streams, block, count))
+
+  override def xRange(
+      key: K,
+      start: effects.XRangePoint,
+      end: effects.XRangePoint,
+      count: Option[Long]
+  ): F[List[effects.StreamMessage[K, V]]] =
+    wrapper.wrap(
+      "xRange",
+      Attributes.From(start.toString) :: Attributes.To(end.toString) :: count.map(Attributes.Count(_)).toList :::
+        keyAsAttribute(key).toList
+    )(cmd.xRange(key, start, end, count))
+
+  override def xRevRange(
+      key: K,
+      start: effects.XRangePoint,
+      end: effects.XRangePoint,
+      count: Option[Long]
+  ): F[List[effects.StreamMessage[K, V]]] =
+    wrapper.wrap(
+      "xRevRange",
+      Attributes.From(start.toString) :: Attributes.To(end.toString) :: count.map(Attributes.Count(_)).toList :::
+        keyAsAttribute(key).toList
+    )(cmd.xRevRange(key, start, end, count))
+
+  override def xLen(key: K): F[Long] =
+    wrapper.wrap("xLen", keyAsAttribute(key).toList)(cmd.xLen(key))
 
   override def blPop(timeout: Duration, keys: NonEmptyList[K]): F[Option[(K, V)]] =
     wrapper.wrap("blPop", Attributes.timeout(timeout) :: keys2AsAttribute(keys.toList).toList)(cmd.blPop(timeout, keys))

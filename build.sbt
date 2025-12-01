@@ -57,7 +57,7 @@ lazy val effects = project
 
 lazy val streams = project
   .in(file("streams"))
-  .dependsOn(core)
+  .dependsOn(core, effects)
   .settings(
     name := "otel4s-redis4cats-streams",
     libraryDependencies ++= Seq(
