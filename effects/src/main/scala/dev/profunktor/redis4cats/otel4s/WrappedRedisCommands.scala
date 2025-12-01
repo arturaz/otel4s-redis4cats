@@ -415,8 +415,8 @@ trait WrappedRedisCommands[F[_], K, V] extends RedisCommands[F, K, V] {
         .toList ::: keys2AsAttribute(keys).toList
     )(cmd.zInterStore(destination, args, keys*))
 
-  override def zRem(key: K, values: V*): F[Long] =
-    wrapper.wrap("zRem", values2AsAttribute(values).toList ::: keyAsAttribute(key).toList)(cmd.zRem(key, values*))
+  override def zRem(key: K, value: V, values: V*): F[Long] =
+    wrapper.wrap("zRem", valueAsAttribute(value).toList ::: values2AsAttribute(values).toList ::: keyAsAttribute(key).toList)(cmd.zRem(key, value, values*))
 
   override def zRemRangeByLex(key: K, range: effects.ZRange[V]): F[Long] =
     wrapper.wrap(
@@ -536,11 +536,11 @@ trait WrappedRedisCommands[F[_], K, V] extends RedisCommands[F, K, V] {
       cmd.geoDist(key, from, to, unit)
     )
 
-  override def geoHash(key: K, values: V*): F[List[Option[String]]] =
-    wrapper.wrap("geoHash", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.geoHash(key, values*))
+  override def geoHash(key: K, value: V, values: V*): F[List[Option[String]]] =
+    wrapper.wrap("geoHash", keyAsAttribute(key).toList ::: valueAsAttribute(value).toList ::: values2AsAttribute(values).toList)(cmd.geoHash(key, value, values*))
 
-  override def geoPos(key: K, values: V*): F[List[effects.GeoCoordinate]] =
-    wrapper.wrap("geoPos", keyAsAttribute(key).toList ::: values2AsAttribute(values).toList)(cmd.geoPos(key, values*))
+  override def geoPos(key: K, value: V, values: V*): F[List[effects.GeoCoordinate]] =
+    wrapper.wrap("geoPos", keyAsAttribute(key).toList ::: valueAsAttribute(value).toList ::: values2AsAttribute(values).toList)(cmd.geoPos(key, value, values*))
 
   override def geoRadius(key: K, geoRadius: effects.GeoRadius, unit: GeoArgs.Unit): F[Set[V]] =
     wrapper.wrap(
@@ -911,14 +911,14 @@ trait WrappedRedisCommands[F[_], K, V] extends RedisCommands[F, K, V] {
       cmd.copy(source, destination, copyArgs)
     )
 
-  override def del(key: K*): F[Long] =
-    wrapper.wrap("del", keys2AsAttribute(key).toList)(cmd.del(key*))
+  override def del(k: K, key: K*): F[Long] =
+    wrapper.wrap("del", keyAsAttribute(k).toList ::: keys2AsAttribute(key).toList)(cmd.del(k, key*))
 
   override def dump(key: K): F[Option[Array[Byte]]] =
     wrapper.wrap("dump", keyAsAttribute(key).toList)(cmd.dump(key))
 
-  override def exists(key: K*): F[Boolean] =
-    wrapper.wrap("exists", keys2AsAttribute(key).toList)(cmd.exists(key*))
+  override def exists(key: K, keys: K*): F[Boolean] =
+    wrapper.wrap("exists", keyAsAttribute(key).toList ::: keys2AsAttribute(keys).toList)(cmd.exists(key, keys*))
 
   override def expire(key: K, expiresIn: FiniteDuration): F[Boolean] =
     wrapper.wrap("expire", Attributes.expiresIn(expiresIn) :: keyAsAttribute(key).toList)(cmd.expire(key, expiresIn))
@@ -1031,12 +1031,13 @@ trait WrappedRedisCommands[F[_], K, V] extends RedisCommands[F, K, V] {
       cmd.bitField(key, operations*)
     )
 
-  override def bitOpAnd(destination: K, sources: K*): F[Unit] =
+  override def bitOpAnd(destination: K, source: K, sources: K*): F[Unit] =
     wrapper.wrap(
       "bitOpAnd",
+      keyAsAttribute(source).toList :::
       keys2AsAttribute(sources).toList ::: keyAsAttribute(destination, Attributes.Destination).toList
     )(
-      cmd.bitOpAnd(destination, sources*)
+      cmd.bitOpAnd(destination, source, sources*)
     )
 
   override def bitOpNot(destination: K, source: K): F[Unit] =
@@ -1047,20 +1048,22 @@ trait WrappedRedisCommands[F[_], K, V] extends RedisCommands[F, K, V] {
       cmd.bitOpNot(destination, source)
     )
 
-  override def bitOpOr(destination: K, sources: K*): F[Unit] =
+  override def bitOpOr(destination: K, source:K,sources: K*): F[Unit] =
     wrapper.wrap(
       "bitOpOr",
+      keyAsAttribute(source).toList :::
       keys2AsAttribute(sources).toList ::: keyAsAttribute(destination, Attributes.Destination).toList
     )(
-      cmd.bitOpOr(destination, sources*)
+      cmd.bitOpOr(destination, source, sources*)
     )
 
-  override def bitOpXor(destination: K, sources: K*): F[Unit] =
+  override def bitOpXor(destination: K, source: K, sources: K*): F[Unit] =
     wrapper.wrap(
       "bitOpXor",
+      keyAsAttribute(source).toList :::
       keys2AsAttribute(sources).toList ::: keyAsAttribute(destination, Attributes.Destination).toList
     )(
-      cmd.bitOpXor(destination, sources*)
+      cmd.bitOpXor(destination, source, sources*)
     )
 
   override def bitPos(key: K, state: Boolean): F[Long] =

@@ -10,24 +10,21 @@ ThisBuild / developers := List(
   tlGitHubDev("arturaz", "Artūras Šlajus")
 )
 
-// publish to s01.oss.sonatype.org (set to true to publish to oss.sonatype.org instead)
-ThisBuild / sonatypeCredentialHost := xerial.sbt.Sonatype.sonatypeLegacy
-
 // publish website from this branch
 ThisBuild / tlSitePublishBranch := Some("main")
 
 val Scala213 = "2.13.16"
-ThisBuild / crossScalaVersions := Seq(Scala213, "3.3.5")
+ThisBuild / crossScalaVersions := Seq(Scala213, "3.3.7")
 ThisBuild / scalaVersion := Scala213 // the default Scala
 
-val Redis4CatsVersion = "1.8.0-21-2b73cea-SNAPSHOT"
-val Otel4sVersion = "0.11.2"
+val Redis4CatsVersion = "2.0.1"
+val Otel4sVersion = "0.14.0"
 
 lazy val root = tlCrossRootProject.aggregate(core, effects, streams)
 
 val MUnit = Seq(
-  "org.scalameta" %% "munit" % "1.1.0" % Test,
-  "org.typelevel" %% "munit-cats-effect" % "2.0.0" % Test
+  "org.scalameta" %% "munit" % "1.2.1" % Test,
+  "org.typelevel" %% "munit-cats-effect" % "2.1.0" % Test
 )
 
 lazy val core = project
@@ -40,7 +37,11 @@ lazy val core = project
       "org.typelevel" %% "otel4s-core-trace" % Otel4sVersion
     ) ++ MUnit,
     buildInfoKeys := Seq[BuildInfoKey](version),
-    buildInfoPackage := "dev.profunktor.redis4cats.otel4s.buildinfo"
+    buildInfoPackage := "dev.profunktor.redis4cats.otel4s.buildinfo",
+    addCommandAlias(
+      "prepareCi",
+      "scalafmtAll;scalafmtSbt;scalafixAll;test;docs/tlSite;mimaReportBinaryIssues;githubWorkflowCheck"
+    )
   )
 
 lazy val effects = project

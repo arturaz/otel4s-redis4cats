@@ -1,7 +1,7 @@
 package dev.profunktor.redis4cats.otel4s
 
-import org.typelevel.otel4s.AttributeKey
 import org.typelevel.otel4s.Attribute
+import org.typelevel.otel4s.AttributeKey
 
 /** Various helpers that help wrapping the commands. */
 trait WrappingHelpers[K, V] {

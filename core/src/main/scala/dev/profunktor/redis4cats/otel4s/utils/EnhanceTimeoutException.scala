@@ -1,10 +1,10 @@
 package dev.profunktor.redis4cats.otel4s.utils
 
 import cats.ApplicativeThrow
-import dev.profunktor.redis4cats.otel4s.CommandWrapper
-import org.typelevel.otel4s.Attribute
 import cats.syntax.all.*
+import dev.profunktor.redis4cats.otel4s.CommandWrapper
 import io.lettuce.core.RedisCommandTimeoutException
+import org.typelevel.otel4s.Attribute
 
 /** Adds the command name and attributes to the [[RedisCommandTimeoutException]] message. */
 object EnhanceTimeoutException {
